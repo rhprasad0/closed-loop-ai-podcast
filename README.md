@@ -1,0 +1,219 @@
+# 0 Stars, 10/10
+
+A closed-loop multi-agent podcast pipeline on AWS. Every week, four AI agents collaborate to discover an underrated GitHub project, research the developer, write a comedy podcast script, evaluate it, produce audio, and publish the episode — with zero human intervention.
+
+Three AI personas — **Hype** (the relentless optimist), **Roast** (dry British wit), and **Phil** (the existential philosopher) — discuss small, obscure GitHub projects with very few stars and hype up the developers who built them.
+
+**Live site:** [podcast.ryans-lab.click](https://podcast.ryans-lab.click)
+**Dashboard:** [dashboard.ryans-lab.click](https://dashboard.ryans-lab.click)
+
+## Architecture
+
+```
+EventBridge Scheduler (weekly cron)
+        │
+        ▼
+Step Functions State Machine (Standard)
+        │
+        ├──► Discovery Agent Lambda
+        │      Bedrock + Exa API
+        │      Queries episode history to avoid repeats
+        │      Queries episode metrics to bias toward what performs well
+        │
+        ├──► Research Agent Lambda
+        │      Bedrock + GitHub API
+        │      Developer profile, repos, commit patterns, backstory
+        │
+        ├──► Script Agent Lambda
+        │      Bedrock (Claude)
+        │      Three-persona comedy script, <5000 chars
+        │
+        ├──► Producer Agent Lambda (evaluator)
+        │      Bedrock (Claude)
+        │      Quality gate: structure, persona voice, char count
+        │      ─── Choice State ───
+        │          FAIL → back to Script Agent (max 3 attempts)
+        │          PASS → continue
+        │
+        ├──► TTS Lambda
+        │      ElevenLabs text-to-dialogue API
+        │      MP3 → S3
+        │
+        ├──► Post-Production Lambda
+        │      ffmpeg: cover art + audio → MP4
+        │      Writes episode record to RDS Postgres
+        │
+        └──► Site Generator Lambda
+               Rebuilds static site from episode catalog
+               Deploys to S3 + CloudFront
+```
+
+### Agent Design Patterns
+
+**Evaluator-optimizer loop.** The Producer agent evaluates the Script agent's output against a rubric (character count, segment structure, persona voice distinctness, hiring segment specificity). On failure, it returns structured feedback that the Script agent uses on its next attempt. This is implemented as a Step Functions Choice state with a retry counter — the same pattern AWS documents in their [prescriptive guidance for agentic AI](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html).
+
+**Cross-episode learning.** The Discovery agent queries an `episode_metrics` table (LinkedIn views, likes, comments) and the `episodes` table (previously featured developers and project types). Search objectives evolve based on what actually performed well. This is a feedback loop across executions, not just within a single run.
+
+**Tool use.** The Discovery and Research agents use Bedrock's tool-use capabilities to call external APIs (Exa search, GitHub API) as part of their reasoning, rather than hardcoded API-then-LLM sequences.
+
+## Infrastructure
+
+Everything is Terraform. Everything is serverless.
+
+| Component | Service | Purpose |
+|-----------|---------|---------|
+| Orchestration | Step Functions (Standard) | Agent pipeline with evaluator loop |
+| Compute | Lambda (Python) | One function per agent |
+| Models | Bedrock (Claude) | All agent reasoning |
+| TTS | ElevenLabs API | Multi-voice podcast audio |
+| Storage | S3 | Episode assets, static site |
+| Database | RDS Postgres | Episode catalog, metrics, featured devs |
+| Scheduling | EventBridge Scheduler | Weekly cron trigger |
+| CDN | CloudFront | Podcast site |
+| Secrets | Secrets Manager | API keys (ElevenLabs, Exa) |
+| Monitoring | CloudWatch | Logs, alarms |
+| Media | Lambda Layer (ffmpeg) | Audio → video conversion |
+
+## Repo Structure
+
+```
+├── terraform/
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   ├── step-functions.tf
+│   ├── scheduling.tf
+│   ├── rds.tf
+│   ├── s3.tf
+│   ├── site.tf
+│   └── modules/
+│       └── lambda/
+├── lambdas/
+│   ├── shared/                  # Lambda Layer: Bedrock client, DB helpers, S3 utils
+│   ├── discovery/
+│   │   ├── handler.py
+│   │   └── prompts/discovery.md
+│   ├── research/
+│   │   ├── handler.py
+│   │   └── prompts/research.md
+│   ├── script/
+│   │   ├── handler.py
+│   │   └── prompts/script.md
+│   ├── producer/
+│   │   ├── handler.py
+│   │   └── prompts/producer.md
+│   ├── tts/
+│   │   └── handler.py
+│   ├── post-production/
+│   │   └── handler.py
+│   └── site-generator/
+│       ├── handler.py
+│       └── templates/
+├── layers/
+│   └── ffmpeg/
+├── site/                        # Static site assets (CSS, images)
+├── sql/
+│   └── schema.sql               # Table definitions
+└── README.md
+```
+
+## Database Schema
+
+Three tables in the existing RDS Postgres instance:
+
+**`episodes`** — Episode catalog, also powers the website.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| episode_id | serial | PK |
+| air_date | date | |
+| repo_url | text | |
+| repo_name | text | |
+| developer_github | text | |
+| developer_name | text | |
+| star_count_at_recording | int | |
+| script_text | text | Full approved script |
+| research_json | jsonb | Research agent output |
+| s3_mp3_path | text | |
+| s3_mp4_path | text | |
+| cover_art_prompt | text | |
+| producer_attempts | int | How many script iterations |
+| created_at | timestamptz | |
+
+**`episode_metrics`** — LinkedIn performance, updated periodically.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| metric_id | serial | PK |
+| episode_id | int | FK → episodes |
+| linkedin_post_url | text | |
+| views | int | |
+| likes | int | |
+| comments | int | |
+| shares | int | |
+| snapshot_date | date | |
+
+**`featured_developers`** — Dedup list for the Discovery agent.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| developer_github | text | PK |
+| episode_id | int | FK → episodes |
+| featured_date | date | |
+
+## The Podcast
+
+### Personas
+
+| Name | Role | Voice |
+|------|------|-------|
+| Hype | The Hype Beast — relentlessly positive, absurd startup comparisons | Eric (ElevenLabs) |
+| Roast | The Roast Master — dry British wit, grudgingly respects good work | George (ElevenLabs) |
+| Phil | The Philosopher — over-interprets READMEs, existential questions | Jessica (ElevenLabs) |
+
+### Episode Structure
+
+1. Intro & project reveal
+2. Core debate (comedy centerpiece around an interesting technical decision)
+3. Developer deep-dive (GitHub profile, other projects, backstory)
+4. Technical appreciation (Roast's grudging compliment = emotional turn)
+5. "Hiring manager" segment (each persona explains why this project signals talent)
+6. Outro with callbacks
+
+### Constraints
+
+- ElevenLabs text-to-dialogue API: **5,000 character limit** per request
+- Target script length: 4,000–4,500 characters
+- Three voices max per episode
+- TTS model: `eleven_v3`
+- Output: `mp3_44100_128`
+
+## Deployment
+
+```bash
+cd terraform
+terraform init
+terraform plan
+terraform apply
+```
+
+Required variables:
+- `elevenlabs_api_key`
+- `exa_api_key`
+- `rds_connection_string` (existing instance)
+- `domain_name` (for CloudFront + Route53)
+
+## Cost
+
+Targeting near-zero monthly cost for weekly execution:
+
+- **Lambda:** ~6 invocations/week, well within free tier
+- **Step Functions:** ~10 state transitions/week, negligible
+- **Bedrock:** Variable per model, ~$0.50–2.00/episode depending on retries
+- **ElevenLabs:** Per character, ~$0.10–0.30/episode at current script lengths
+- **S3 + CloudFront:** Minimal storage and transfer
+- **RDS:** Shared with NanoClaw, no incremental cost
+
+## License
+
+MIT
