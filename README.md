@@ -5,7 +5,6 @@ A closed-loop multi-agent podcast pipeline on AWS. Every week, four AI agents co
 Three AI personas — **Hype** (the relentless optimist), **Roast** (dry British wit), and **Phil** (the existential philosopher) — discuss small, obscure GitHub projects with very few stars and hype up the developers who built them.
 
 **Live site:** [podcast.ryans-lab.click](https://podcast.ryans-lab.click)
-**Dashboard:** [dashboard.ryans-lab.click](https://dashboard.ryans-lab.click)
 
 ## Architecture
 
