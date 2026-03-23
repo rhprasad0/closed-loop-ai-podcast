@@ -1,12 +1,91 @@
 # 0 Stars, 10/10
 
-A closed-loop multi-agent podcast pipeline on AWS. Every week, four AI agents collaborate to discover an underrated GitHub project, research the developer, write a comedy podcast script, evaluate it, produce audio, and publish the episode — with zero human intervention.
+A closed-loop multi-agent podcast pipeline on AWS. Every week, four AI agents collaborate to discover an underrated GitHub project, research the developer, write a comedy podcast script, evaluate it, generate cover art, produce audio, and publish the episode — with zero human intervention.
 
 Three AI personas — **Hype** (the relentless optimist), **Roast** (dry British wit), and **Phil** (the existential philosopher) — discuss small, obscure GitHub projects with very few stars and hype up the developers who built them.
 
 **Live site:** [podcast.ryans-lab.click](https://podcast.ryans-lab.click)
 
 ## Architecture
+
+```mermaid
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a1a2e', 'primaryTextColor': '#e0e0e0', 'primaryBorderColor': '#4a4a6a', 'lineColor': '#7c7caa', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f3460', 'background': '#0a0a1a', 'mainBkg': '#1a1a2e', 'nodeBorder': '#4a4a6a', 'clusterBkg': '#12122a', 'clusterBorder': '#3a3a5c', 'titleColor': '#ffffff', 'edgeLabelBackground': '#1a1a2e', 'fontFamily': 'Inter, Segoe UI, sans-serif', 'fontSize': '14px'}}}%%
+
+graph TB
+    CRON["⏰ EventBridge Scheduler<br/><i>Weekly cron · Sunday 9 AM ET</i>"]
+
+    subgraph SF["  AWS Step Functions · Standard Workflow  "]
+        direction TB
+
+        DISCOVERY["🔍 DISCOVERY AGENT<br/>Bedrock + Exa API<br/><i>Finds underrated GitHub repos</i>"]
+        RESEARCH["📋 RESEARCH AGENT<br/>Bedrock + GitHub API<br/><i>Profiles the developer</i>"]
+        SCRIPT["✍️ SCRIPT AGENT<br/>Bedrock · Claude<br/><i>3-persona comedy script</i>"]
+        PRODUCER{"🎬 PRODUCER AGENT<br/>Bedrock · Claude<br/><i>Quality evaluator</i>"}
+        CHOICE{{"✅ Pass · ❌ Fail"}}
+        COVERART["🎨 COVER ART<br/>Bedrock · Nova Canvas<br/><i>Episode artwork</i>"]
+        TTS["🎙️ TTS<br/>ElevenLabs API<br/><i>text-to-dialogue</i>"]
+        POSTPROD["🎞️ POST-PRODUCTION<br/>ffmpeg Lambda Layer<br/><i>MP3 + cover art → MP4</i>"]
+
+        DISCOVERY --> RESEARCH
+        RESEARCH --> SCRIPT
+        SCRIPT --> PRODUCER
+        PRODUCER --> CHOICE
+        CHOICE -- "❌ FAIL · retry ≤3x<br/>with feedback" --> SCRIPT
+        CHOICE -- "✅ PASS" --> COVERART
+        COVERART --> TTS
+        TTS --> POSTPROD
+    end
+
+    EXA[("Exa Search<br/>API")]
+    GITHUB[("GitHub<br/>API")]
+    BEDROCK[("AWS Bedrock<br/>Claude + Nova Canvas")]
+    ELEVENLABS[("ElevenLabs<br/>eleven_v3")]
+
+    S3[("S3<br/>Episode Assets")]
+    RDS[("RDS Postgres<br/>Episodes · Metrics<br/>Featured Devs")]
+    SITE["🌐 Dynamic Site<br/>Lambda Function URL<br/>+ CloudFront"]
+
+    CRON ==> SF
+
+    DISCOVERY -.-> EXA
+    DISCOVERY -.-> BEDROCK
+    RESEARCH -.-> GITHUB
+    RESEARCH -.-> BEDROCK
+    SCRIPT -.-> BEDROCK
+    PRODUCER -.-> BEDROCK
+    COVERART -.-> BEDROCK
+    TTS -.-> ELEVENLABS
+
+    RDS -. "episode history + metrics<br/>feed search objectives" .-> DISCOVERY
+    RDS -. "top-performing scripts<br/>as quality benchmark" .-> PRODUCER
+
+    COVERART --> S3
+    TTS --> S3
+    POSTPROD --> S3
+    POSTPROD --> RDS
+    RDS --> SITE
+    S3 --> SITE
+
+    classDef trigger fill:#e17055,stroke:#d63031,color:#fff,font-weight:bold,stroke-width:2px
+    classDef agent fill:#0984e3,stroke:#74b9ff,color:#fff,font-weight:bold,stroke-width:2px
+    classDef evaluator fill:#6c5ce7,stroke:#a29bfe,color:#fff,font-weight:bold,stroke-width:2px
+    classDef choice fill:#fdcb6e,stroke:#ffeaa7,color:#2d3436,font-weight:bold,stroke-width:2px
+    classDef process fill:#00b894,stroke:#55efc4,color:#fff,font-weight:bold,stroke-width:2px
+    classDef external fill:#2d3436,stroke:#636e72,color:#dfe6e9,stroke-width:2px
+    classDef storage fill:#2d3436,stroke:#636e72,color:#dfe6e9,stroke-width:2px
+    classDef site fill:#00cec9,stroke:#81ecec,color:#2d3436,font-weight:bold,stroke-width:2px
+
+    class CRON trigger
+    class DISCOVERY,RESEARCH,SCRIPT agent
+    class PRODUCER evaluator
+    class CHOICE choice
+    class COVERART,TTS,POSTPROD process
+    class EXA,GITHUB,BEDROCK,ELEVENLABS external
+    class S3,RDS storage
+    class SITE site
+```
+
+### Pipeline Flow
 
 ```
 EventBridge Scheduler (weekly cron)
@@ -29,29 +108,34 @@ Step Functions State Machine (Standard)
         │
         ├──► Producer Agent Lambda (evaluator)
         │      Bedrock (Claude)
+        │      Reads top-performing scripts from Postgres as benchmark
         │      Quality gate: structure, persona voice, char count
         │      ─── Choice State ───
         │          FAIL → back to Script Agent (max 3 attempts)
         │          PASS → continue
         │
+        ├──► Cover Art Lambda
+        │      Bedrock (Nova Canvas)
+        │      Generates episode artwork from prompt
+        │      PNG → S3
+        │
         ├──► TTS Lambda
         │      ElevenLabs text-to-dialogue API
         │      MP3 → S3
         │
-        ├──► Post-Production Lambda
-        │      ffmpeg: cover art + audio → MP4
-        │      Writes episode record to RDS Postgres
-        │
-        └──► Site Generator Lambda
-               Rebuilds static site from episode catalog
-               Deploys to S3 + CloudFront
+        └──► Post-Production Lambda
+               ffmpeg: cover art + audio → MP4
+               Writes episode record to RDS Postgres
+               Uploads final assets to S3
 ```
+
+The podcast website is a **dynamic site** — a Lambda Function URL backed by Postgres, fronted by CloudFront. It reads from the same `episodes` table the pipeline writes to, so new episodes appear automatically without a build or deploy step.
 
 ### Agent Design Patterns
 
 **Evaluator-optimizer loop.** The Producer agent evaluates the Script agent's output against a rubric (character count, segment structure, persona voice distinctness, hiring segment specificity). On failure, it returns structured feedback that the Script agent uses on its next attempt. This is implemented as a Step Functions Choice state with a retry counter — the same pattern AWS documents in their [prescriptive guidance for agentic AI](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html).
 
-**Cross-episode learning.** The Discovery agent queries an `episode_metrics` table (LinkedIn views, likes, comments) and the `episodes` table (previously featured developers and project types). Search objectives evolve based on what actually performed well. This is a feedback loop across executions, not just within a single run.
+**Cross-episode learning.** The Discovery agent queries an `episode_metrics` table (LinkedIn views, likes, comments) and the `episodes` table (previously featured developers and project types). Search objectives evolve based on what actually performed well. The Producer agent reads top-performing scripts from Postgres as quality benchmarks, so the quality bar adapts to what resonates with the audience rather than relying on a static rubric alone.
 
 **Tool use.** The Discovery and Research agents use Bedrock's tool-use capabilities to call external APIs (Exa search, GitHub API) as part of their reasoning, rather than hardcoded API-then-LLM sequences.
 
@@ -64,11 +148,12 @@ Everything is Terraform. Everything is serverless.
 | Orchestration | Step Functions (Standard) | Agent pipeline with evaluator loop |
 | Compute | Lambda (Python) | One function per agent |
 | Models | Bedrock (Claude) | All agent reasoning |
+| Image Gen | Bedrock (Nova Canvas) | Episode cover art |
 | TTS | ElevenLabs API | Multi-voice podcast audio |
-| Storage | S3 | Episode assets, static site |
+| Storage | S3 | Episode assets (MP3, MP4, cover art) |
 | Database | RDS Postgres | Episode catalog, metrics, featured devs |
+| Website | Lambda Function URL + CloudFront | Dynamic podcast site |
 | Scheduling | EventBridge Scheduler | Weekly cron trigger |
-| CDN | CloudFront | Podcast site |
 | Secrets | Secrets Manager | API keys (ElevenLabs, Exa) |
 | Monitoring | CloudWatch | Logs, alarms |
 | Media | Lambda Layer (ffmpeg) | Audio → video conversion |
@@ -101,18 +186,21 @@ Everything is Terraform. Everything is serverless.
 │   ├── producer/
 │   │   ├── handler.py
 │   │   └── prompts/producer.md
+│   ├── cover-art/
+│   │   ├── handler.py
+│   │   └── prompts/cover-art.md
 │   ├── tts/
 │   │   └── handler.py
 │   ├── post-production/
 │   │   └── handler.py
-│   └── site-generator/
+│   └── site/
 │       ├── handler.py
 │       └── templates/
 ├── layers/
 │   └── ffmpeg/
-├── site/                        # Static site assets (CSS, images)
+├── site/                        # Static assets (CSS, images)
 ├── sql/
-│   └── schema.sql               # Table definitions
+│   └── schema.sql
 └── README.md
 ```
 
@@ -120,7 +208,7 @@ Everything is Terraform. Everything is serverless.
 
 Three tables in the existing RDS Postgres instance:
 
-**`episodes`** — Episode catalog, also powers the website.
+**`episodes`** — Episode catalog. Powers both the pipeline and the website.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -133,9 +221,10 @@ Three tables in the existing RDS Postgres instance:
 | star_count_at_recording | int | |
 | script_text | text | Full approved script |
 | research_json | jsonb | Research agent output |
+| cover_art_prompt | text | Prompt sent to Nova Canvas |
 | s3_mp3_path | text | |
 | s3_mp4_path | text | |
-| cover_art_prompt | text | |
+| s3_cover_art_path | text | |
 | producer_attempts | int | How many script iterations |
 | created_at | timestamptz | |
 
@@ -206,12 +295,13 @@ Required variables:
 
 Targeting near-zero monthly cost for weekly execution:
 
-- **Lambda:** ~6 invocations/week, well within free tier
+- **Lambda:** ~7 invocations/week (pipeline) + site traffic, well within free tier
 - **Step Functions:** ~10 state transitions/week, negligible
-- **Bedrock:** Variable per model, ~$0.50–2.00/episode depending on retries
+- **Bedrock (Claude):** ~$0.50–2.00/episode depending on retries
+- **Bedrock (Nova Canvas):** ~$0.04/image
 - **ElevenLabs:** Per character, ~$0.10–0.30/episode at current script lengths
 - **S3 + CloudFront:** Minimal storage and transfer
-- **RDS:** Shared with NanoClaw, no incremental cost
+- **RDS:** Shared instance, no incremental cost
 
 ## License
 

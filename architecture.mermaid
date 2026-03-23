@@ -1,0 +1,74 @@
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a1a2e', 'primaryTextColor': '#e0e0e0', 'primaryBorderColor': '#4a4a6a', 'lineColor': '#7c7caa', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f3460', 'background': '#0a0a1a', 'mainBkg': '#1a1a2e', 'nodeBorder': '#4a4a6a', 'clusterBkg': '#12122a', 'clusterBorder': '#3a3a5c', 'titleColor': '#ffffff', 'edgeLabelBackground': '#1a1a2e', 'fontFamily': 'Inter, Segoe UI, sans-serif', 'fontSize': '14px'}}}%%
+
+graph TB
+    CRON["⏰ EventBridge Scheduler<br/><i>Weekly cron · Sunday 9 AM ET</i>"]
+
+    subgraph SF["  AWS Step Functions · Standard Workflow  "]
+        direction TB
+
+        DISCOVERY["🔍 DISCOVERY AGENT<br/>Bedrock + Exa API<br/><i>Finds underrated GitHub repos</i>"]
+        RESEARCH["📋 RESEARCH AGENT<br/>Bedrock + GitHub API<br/><i>Profiles the developer</i>"]
+        SCRIPT["✍️ SCRIPT AGENT<br/>Bedrock · Claude<br/><i>3-persona comedy script</i>"]
+        PRODUCER{"🎬 PRODUCER AGENT<br/>Bedrock · Claude<br/><i>Quality evaluator</i>"}
+        CHOICE{{"✅ Pass · ❌ Fail"}}
+        COVERART["🎨 COVER ART<br/>Bedrock · Nova Canvas<br/><i>Episode artwork</i>"]
+        TTS["🎙️ TTS<br/>ElevenLabs API<br/><i>text-to-dialogue</i>"]
+        POSTPROD["🎞️ POST-PRODUCTION<br/>ffmpeg Lambda Layer<br/><i>MP3 + cover art → MP4</i>"]
+
+        DISCOVERY --> RESEARCH
+        RESEARCH --> SCRIPT
+        SCRIPT --> PRODUCER
+        PRODUCER --> CHOICE
+        CHOICE -- "❌ FAIL · retry ≤3x<br/>with feedback" --> SCRIPT
+        CHOICE -- "✅ PASS" --> COVERART
+        COVERART --> TTS
+        TTS --> POSTPROD
+    end
+
+    EXA[("Exa Search<br/>API")]
+    GITHUB[("GitHub<br/>API")]
+    BEDROCK[("AWS Bedrock<br/>Claude + Nova Canvas")]
+    ELEVENLABS[("ElevenLabs<br/>eleven_v3")]
+
+    S3[("S3<br/>Episode Assets")]
+    RDS[("RDS Postgres<br/>Episodes · Metrics<br/>Featured Devs")]
+    SITE["🌐 Dynamic Site<br/>Lambda Function URL<br/>+ CloudFront"]
+
+    CRON ==> SF
+
+    DISCOVERY -.-> EXA
+    DISCOVERY -.-> BEDROCK
+    RESEARCH -.-> GITHUB
+    RESEARCH -.-> BEDROCK
+    SCRIPT -.-> BEDROCK
+    PRODUCER -.-> BEDROCK
+    COVERART -.-> BEDROCK
+    TTS -.-> ELEVENLABS
+
+    RDS -. "episode history + metrics<br/>feed search objectives" .-> DISCOVERY
+    RDS -. "top-performing scripts<br/>as quality benchmark" .-> PRODUCER
+
+    COVERART --> S3
+    TTS --> S3
+    POSTPROD --> S3
+    POSTPROD --> RDS
+    RDS --> SITE
+    S3 --> SITE
+
+    classDef trigger fill:#e17055,stroke:#d63031,color:#fff,font-weight:bold,stroke-width:2px
+    classDef agent fill:#0984e3,stroke:#74b9ff,color:#fff,font-weight:bold,stroke-width:2px
+    classDef evaluator fill:#6c5ce7,stroke:#a29bfe,color:#fff,font-weight:bold,stroke-width:2px
+    classDef choice fill:#fdcb6e,stroke:#ffeaa7,color:#2d3436,font-weight:bold,stroke-width:2px
+    classDef process fill:#00b894,stroke:#55efc4,color:#fff,font-weight:bold,stroke-width:2px
+    classDef external fill:#2d3436,stroke:#636e72,color:#dfe6e9,stroke-width:2px
+    classDef storage fill:#2d3436,stroke:#636e72,color:#dfe6e9,stroke-width:2px
+    classDef site fill:#00cec9,stroke:#81ecec,color:#2d3436,font-weight:bold,stroke-width:2px
+
+    class CRON trigger
+    class DISCOVERY,RESEARCH,SCRIPT agent
+    class PRODUCER evaluator
+    class CHOICE choice
+    class COVERART,TTS,POSTPROD process
+    class EXA,GITHUB,BEDROCK,ELEVENLABS external
+    class S3,RDS storage
+    class SITE site
