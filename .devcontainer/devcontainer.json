@@ -1,0 +1,63 @@
+{
+    "name": "0 Stars 10/10 - Podcast Pipeline",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {
+            "moby": false,
+            "dockerDashComposeVersion": "v2"
+        }
+    },
+    "mounts": [
+        "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,readonly"
+    ],
+    "postCreateCommand": "bash .devcontainer/post-create.sh",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.analysis.typeCheckingMode": "basic",
+                "[python]": {
+                    "editor.defaultFormatter": "charliermarsh.ruff",
+                    "editor.formatOnSave": true,
+                    "editor.codeActionsOnSave": {
+                        "source.fixAll": "explicit",
+                        "source.organizeImports": "explicit"
+                    }
+                },
+                "[terraform]": {
+                    "editor.defaultFormatter": "hashicorp.terraform",
+                    "editor.formatOnSave": true
+                },
+                "[terraform-vars]": {
+                    "editor.defaultFormatter": "hashicorp.terraform",
+                    "editor.formatOnSave": true
+                },
+                "terraform.languageServer.enable": true,
+                "editor.rulers": [100],
+                "files.trimTrailingWhitespace": true,
+                "files.insertFinalNewline": true,
+                "terminal.integrated.defaultProfile.linux": "bash"
+            },
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "charliermarsh.ruff",
+                "hashicorp.terraform",
+                "ms-azuretools.vscode-docker",
+                "amazonwebservices.aws-toolkit-vscode",
+                "redhat.vscode-yaml",
+                "bierner.markdown-mermaid",
+                "eamodio.gitlens"
+            ]
+        }
+    },
+    "remoteUser": "vscode",
+    "remoteEnv": {
+        "AWS_DEFAULT_REGION": "us-east-1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "SAM_CLI_TELEMETRY": "0"
+    }
+}
