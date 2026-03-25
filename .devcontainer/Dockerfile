@@ -62,3 +62,6 @@ RUN pip install --no-cache-dir \
         pytest \
         pytest-cov \
         moto
+
+# uv (provides uvx, used by Claude Code MCP servers)
+RUN pip install --no-cache-dir uv
