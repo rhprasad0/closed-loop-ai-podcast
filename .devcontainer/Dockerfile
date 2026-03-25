@@ -49,11 +49,16 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
     && rm -rf /tmp/awscliv2.zip /tmp/aws \
     && aws --version
 
-# Python dev tools
+# Python dev tools + runtime deps
 RUN pip install --no-cache-dir \
         ruff \
         boto3 \
         "boto3-stubs[bedrock-runtime,s3,secretsmanager]" \
         psycopg2-binary \
         jinja2 \
-        requests
+        requests \
+        aws-lambda-powertools \
+        mypy \
+        pytest \
+        pytest-cov \
+        moto

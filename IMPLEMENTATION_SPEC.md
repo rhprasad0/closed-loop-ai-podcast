@@ -11,6 +11,10 @@ This is the single source of truth for implementing the podcast pipeline. It con
 Every file below must be created. No other files should be created.
 
 ```
+├── pyproject.toml
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 ├── terraform/
 │   ├── main.tf
 │   ├── variables.tf
@@ -28,7 +32,9 @@ Every file below must be created. No other files should be created.
 │   │           ├── __init__.py
 │   │           ├── bedrock.py
 │   │           ├── db.py
-│   │           └── s3.py
+│   │           ├── s3.py
+│   │           ├── logging.py
+│   │           └── types.py
 │   ├── discovery/
 │   │   ├── handler.py
 │   │   └── prompts/
@@ -63,6 +69,29 @@ Every file below must be created. No other files should be created.
 │       └── build.sh
 ├── sql/
 │   └── schema.sql
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── unit/
+│   │   ├── __init__.py
+│   │   ├── test_discovery.py
+│   │   ├── test_research.py
+│   │   ├── test_script.py
+│   │   ├── test_producer.py
+│   │   ├── test_cover_art.py
+│   │   ├── test_tts.py
+│   │   ├── test_post_production.py
+│   │   ├── test_site.py
+│   │   └── test_shared/
+│   │       ├── __init__.py
+│   │       ├── test_bedrock.py
+│   │       ├── test_db.py
+│   │       └── test_s3.py
+│   └── integration/
+│       ├── __init__.py
+│       ├── test_bedrock_live.py
+│       ├── test_s3_live.py
+│       └── test_db_live.py
 └── README.md
 ```
 
@@ -84,10 +113,12 @@ Every file below must be created. No other files should be created.
 
 | File | Purpose |
 |------|---------|
-| `lambdas/shared/python/shared/__init__.py` | Package init. Re-exports `bedrock`, `db`, `s3` modules for `from shared import bedrock, db, s3` usage. |
+| `lambdas/shared/python/shared/__init__.py` | Package init. Re-exports `bedrock`, `db`, `s3`, `logging`, `types` modules for `from shared import bedrock, db, s3` usage. |
 | `lambdas/shared/python/shared/bedrock.py` | Bedrock client wrapper. Functions: `invoke_model(prompt, system_prompt, model_id)`, `invoke_with_tools(prompt, system_prompt, tools, model_id)`. Default model: Claude on Bedrock. Handles retries for throttling. |
 | `lambdas/shared/python/shared/db.py` | Postgres connection helper. Uses `psycopg2` with `sslmode=require`. Functions: `get_connection()`, `query(sql, params)` (returns rows), `execute(sql, params)` (returns rowcount). Connection string from `DB_CONNECTION_STRING` env var. |
 | `lambdas/shared/python/shared/s3.py` | S3 helper functions: `upload_bytes(bucket, key, data, content_type)`, `upload_file(bucket, key, filepath, content_type)`, `generate_presigned_url(bucket, key, expiry)`. Bucket name from `S3_BUCKET` env var. |
+| `lambdas/shared/python/shared/logging.py` | Powertools Logger factory. Exports `get_logger(service)` which returns a pre-configured structured JSON logger. See Section 10. |
+| `lambdas/shared/python/shared/types.py` | TypedDict definitions for all Lambda input/output contracts. `PipelineState`, `DiscoveryOutput`, `ResearchOutput`, `ScriptOutput`, `ProducerOutput`, `CoverArtOutput`, `TTSOutput`, `PostProductionOutput`. See Section 11. |
 | `lambdas/discovery/handler.py` | Discovery agent. Reads episode history and metrics from Postgres. Calls Bedrock with Exa search as a tool. Returns selected repo and discovery rationale. |
 | `lambdas/discovery/prompts/discovery.md` | System prompt for the Discovery agent. Search criteria, what to look for, how to use episode metrics to bias search. |
 | `lambdas/research/handler.py` | Research agent. Takes discovered repo from previous step. Calls Bedrock with GitHub API as a tool. Builds developer profile. Returns structured research JSON. |
@@ -103,6 +134,33 @@ Every file below must be created. No other files should be created.
 | `lambdas/site/handler.py` | Website handler. Queries `episodes` table from Postgres. Renders Jinja2 templates. Returns HTML response. Handles Lambda Function URL event format. |
 | `lambdas/site/templates/base.html` | Base HTML template. Minimal styling (inline CSS, no external dependencies). Dark theme. Includes `<head>`, nav with podcast title, footer. |
 | `lambdas/site/templates/index.html` | Extends base. Lists episodes reverse-chronologically. Each episode shows: title (repo name), developer name, air date, star count at recording, embedded HTML5 audio player (presigned S3 URL for MP3), cover art image. |
+
+### Project Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `pyproject.toml` | Unified config for mypy (strict mode), pytest (test paths, markers), and ruff (line length, lint rules). See Sections 11–13. |
+| `.github/workflows/ci.yml` | GitHub Actions CI pipeline. Runs ruff lint/format, mypy type checking, and pytest unit tests on every PR. See Section 13. |
+
+### Test Files
+
+| File | Purpose |
+|------|---------|
+| `tests/conftest.py` | Shared pytest fixtures: `pipeline_metadata`, `lambda_context`, `mock_bedrock_client`, `mock_db_connection`, sample output fixtures matching Section 2 contracts. See Section 12. |
+| `tests/unit/test_discovery.py` | Unit tests for Discovery Lambda handler. |
+| `tests/unit/test_research.py` | Unit tests for Research Lambda handler. |
+| `tests/unit/test_script.py` | Unit tests for Script Lambda handler. |
+| `tests/unit/test_producer.py` | Unit tests for Producer Lambda handler. |
+| `tests/unit/test_cover_art.py` | Unit tests for Cover Art Lambda handler. |
+| `tests/unit/test_tts.py` | Unit tests for TTS Lambda handler. |
+| `tests/unit/test_post_production.py` | Unit tests for Post-Production Lambda handler. |
+| `tests/unit/test_site.py` | Unit tests for Site Lambda handler. |
+| `tests/unit/test_shared/test_bedrock.py` | Unit tests for shared Bedrock client wrapper. |
+| `tests/unit/test_shared/test_db.py` | Unit tests for shared Postgres helper. |
+| `tests/unit/test_shared/test_s3.py` | Unit tests for shared S3 helper. |
+| `tests/integration/test_bedrock_live.py` | Integration tests hitting real Bedrock. Marked `@pytest.mark.integration`. |
+| `tests/integration/test_s3_live.py` | Integration tests hitting real S3. Marked `@pytest.mark.integration`. |
+| `tests/integration/test_db_live.py` | Integration tests hitting real Postgres. Marked `@pytest.mark.integration`. |
 
 ### Other Files
 
@@ -437,10 +495,27 @@ No modules. Every resource defined inline. This section maps each Terraform reso
 | ffmpeg Lambda Layer | `aws_lambda_layer_version` | Source: `layers/ffmpeg/ffmpeg-layer.zip` (built by `build.sh`) |
 | Per-Lambda (×8): | | |
 | — Deployment package | `data "archive_file"` | Zips `handler.py` + `prompts/` dir |
-| — Function | `aws_lambda_function` | Python 3.12, layers attached, env vars set |
+| — Function | `aws_lambda_function` | Python 3.12, layers attached, env vars set, `logging_config` block, `depends_on` log group |
 | — IAM role | `aws_iam_role` | Lambda assume-role trust policy |
 | — IAM policy | `aws_iam_role_policy` | Least-privilege: CloudWatch Logs + function-specific permissions |
 | — Log group | `aws_cloudwatch_log_group` | 14-day retention |
+
+**Per-Lambda `logging_config` block** (native Lambda structured logging — applies to all 8 functions):
+
+```hcl
+logging_config {
+  log_format            = "JSON"
+  application_log_level = "INFO"
+  system_log_level      = "WARN"
+}
+```
+
+**Per-Lambda environment variables** (for Powertools — applies to all 8 functions, in addition to function-specific env vars):
+
+| Variable | Value |
+|----------|-------|
+| `POWERTOOLS_SERVICE_NAME` | Function-specific: `discovery`, `research`, `script`, `producer`, `cover_art`, `tts`, `post_production`, `site` |
+| `POWERTOOLS_LOG_LEVEL` | `INFO` |
 
 **Per-Lambda IAM permissions:**
 
@@ -870,7 +945,7 @@ Each Lambda needs its dependencies available at runtime. This section specifies 
 
 ### Shared Layer
 
-The shared layer at `lambdas/shared/` provides `bedrock.py`, `db.py`, and `s3.py`. It also needs `psycopg2` for Postgres access.
+The shared layer at `lambdas/shared/` provides `bedrock.py`, `db.py`, `s3.py`, `logging.py`, and `types.py`. It also needs `psycopg2` for Postgres access and `aws-lambda-powertools` for structured logging.
 
 Use `psycopg2-binary` is not compatible with Lambda's Amazon Linux environment. Use the `aws-psycopg2` package or include a pre-compiled `psycopg2` for Linux x86_64.
 
@@ -944,6 +1019,18 @@ echo "Done: $OUTPUT_DIR/ffmpeg-layer.zip"
 rm -rf "$BUILD_DIR"
 ```
 
+### Dev Dependencies
+
+These packages are needed in the development environment (devcontainer) but are NOT deployed to Lambda:
+
+```bash
+pip install pytest pytest-cov moto mypy ruff \
+    "boto3-stubs[bedrock-runtime,s3,secretsmanager]" \
+    aws-lambda-powertools
+```
+
+The devcontainer Dockerfile installs these automatically. They support type checking (`mypy`, `boto3-stubs`), testing (`pytest`, `pytest-cov`, `moto`), and linting (`ruff`).
+
 ---
 
 ## 9. Deployment Sequence
@@ -956,6 +1043,663 @@ Steps to deploy the pipeline from scratch, in order:
 4. **Run `terraform init` and `terraform apply`** in `terraform/`.
 5. **Enable Bedrock model access** for Claude and Nova Canvas in the AWS console (this cannot be done via Terraform).
 6. **Verify:** Manually trigger the Step Functions state machine to test an end-to-end run.
+
+---
+
+## 10. Structured Logging
+
+All Lambdas use [AWS Lambda Powertools for Python](https://docs.powertools.aws.dev/lambda/python/latest/) for structured JSON logging with automatic CloudWatch integration.
+
+### Logger Module
+
+`lambdas/shared/python/shared/logging.py` exports a single factory function:
+
+```python
+from aws_lambda_powertools import Logger
+
+
+def get_logger(service: str) -> Logger:
+    """Return a pre-configured Powertools Logger for the given service."""
+    return Logger(service=service, log_uncaught_exceptions=True)
+```
+
+### Handler Pattern
+
+Every Lambda handler follows this pattern:
+
+```python
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from shared.logging import get_logger
+from shared.types import PipelineState, DiscoveryOutput
+
+logger = get_logger("discovery")
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOutput:
+    logger.set_correlation_id(event["metadata"]["execution_id"])
+    logger.append_keys(script_attempt=event["metadata"].get("script_attempt", 1))
+
+    logger.info("Starting discovery agent")
+    # ... handler logic ...
+    logger.info("Discovery complete", extra={"repo_url": result["repo_url"]})
+    return result
+```
+
+Key points:
+- `@logger.inject_lambda_context(clear_state=True)` — automatically adds Lambda context fields and clears custom keys between warm invocations to prevent state leakage.
+- `set_correlation_id()` — sets the Step Functions execution ARN as the correlation ID on every log line. This is the primary field for tracing a full pipeline run across all 7 Lambdas.
+- `append_keys()` — adds pipeline-specific context (e.g., `script_attempt`) that persists across all log lines in the invocation.
+
+### Log Level Conventions
+
+| Level | When to use | Examples |
+|-------|-------------|---------|
+| INFO | Normal flow milestones | `"Starting discovery agent"`, `"Script passed evaluation"`, `"Episode record written to Postgres"` |
+| WARNING | Recoverable issues | `"Exa search returned 0 results, retrying with broader query"`, `"Script at 4,950 chars — close to limit"` |
+| ERROR | Failures that will cause the Lambda to raise | `"Bedrock invocation failed after retries"`, `"ElevenLabs returned 422"` |
+| DEBUG | Detailed data for troubleshooting | Full Bedrock request/response bodies, raw API payloads. Off by default — set `POWERTOOLS_LOG_LEVEL=DEBUG` to enable. |
+
+### Standard Fields
+
+Every structured log line automatically includes these fields:
+
+| Field | Source | Example |
+|-------|--------|---------|
+| `service` | Logger constructor arg | `"discovery"` |
+| `level` | Log call | `"INFO"` |
+| `timestamp` | Powertools | `"2025-07-13T13:00:05.123Z"` |
+| `message` | Log call | `"Starting discovery agent"` |
+| `location` | Powertools | `"handler.py:lambda_handler:42"` |
+| `function_name` | `inject_lambda_context` | `"zerostars-discovery"` |
+| `function_arn` | `inject_lambda_context` | `"arn:aws:lambda:us-east-1:..."` |
+| `function_request_id` | `inject_lambda_context` | `"a1b2c3d4-..."` |
+| `cold_start` | `inject_lambda_context` | `true` / `false` |
+| `correlation_id` | `set_correlation_id()` | `"arn:aws:states:us-east-1:...:execution:zerostars-pipeline:abc-123"` |
+| `xray_trace_id` | Powertools (automatic) | `"1-abc123-def456"` |
+
+### CloudWatch Logs Insights
+
+Trace a full pipeline execution across all Lambdas:
+
+```
+filter correlation_id = "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:abc-123"
+| sort @timestamp asc
+| display service, level, message
+```
+
+Find cold starts across all pipeline functions:
+
+```
+filter cold_start = true
+| stats count(*) by service
+```
+
+### Terraform Configuration
+
+Each Lambda function in `lambdas.tf` includes a native `logging_config` block (separate from Powertools — this controls Lambda platform-level log formatting):
+
+```hcl
+resource "aws_lambda_function" "discovery" {
+  # ... other config ...
+
+  logging_config {
+    log_format            = "JSON"
+    application_log_level = "INFO"
+    system_log_level      = "WARN"
+  }
+
+  environment {
+    variables = {
+      POWERTOOLS_SERVICE_NAME = "discovery"
+      POWERTOOLS_LOG_LEVEL    = "INFO"
+      # ... function-specific env vars ...
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.discovery_logs,
+    aws_cloudwatch_log_group.discovery
+  ]
+}
+```
+
+The `logging_config` block ensures Lambda system logs (platform start/end/report events, extension logs) are also JSON-formatted — not just Powertools application logs. Both are needed for fully structured CloudWatch output.
+
+### Error Visibility
+
+Every failure mode is covered by CloudWatch:
+
+| Failure type | What captures it | Where it appears |
+|-------------|-----------------|-----------------|
+| Application error (your code raises) | Powertools Logger (`log_uncaught_exceptions=True`) | CloudWatch Logs, structured JSON with full stack trace |
+| Lambda timeout | Lambda platform | CloudWatch Logs (JSON, via `logging_config`), plus `REPORT` line shows `Status: timeout` |
+| Import error / bad deployment package | Lambda platform (before your code runs) | CloudWatch Logs (JSON, via `logging_config.system_log_level = "WARN"`) |
+| Bedrock throttling / transient failure | Step Functions Retry block | Step Functions execution history (visible in console), plus the Lambda's error log before retry |
+| Producer FAIL verdict (not an error) | Normal application log | CloudWatch Logs (`logger.info("Script failed evaluation", ...)`) + Step Functions Choice state transition |
+| Pipeline-level failure (max retries exceeded) | Step Functions `PipelineFailed` Fail state | Step Functions execution history, CloudWatch Events |
+
+The `correlation_id` (Step Functions execution ARN) on every log line lets you trace a full pipeline run across all 7 Lambdas with a single CloudWatch Logs Insights query (see above).
+
+### Site Lambda
+
+The site Lambda is not part of the Step Functions pipeline and has no `execution_id` to use as a correlation ID. Instead, use the Lambda request ID (automatically included by `inject_lambda_context`) for tracing. The handler pattern is the same minus the `set_correlation_id` call.
+
+---
+
+## 11. Type Checking
+
+All Python code uses strict type annotations enforced by mypy. TypedDict definitions in the shared layer provide compile-time validation that Lambda inputs and outputs match the interface contracts from Section 2.
+
+### mypy Configuration
+
+In `pyproject.toml`:
+
+```toml
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "psycopg2.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "aws_lambda_powertools.*"
+ignore_missing_imports = true
+```
+
+`strict = true` enables: `disallow_untyped_defs`, `disallow_any_generics`, `warn_return_any`, `no_implicit_reexport`, `strict_equality`, and all other strict flags. This means every function must have full parameter and return type annotations.
+
+Run locally: `mypy lambdas/` with `PYTHONPATH=lambdas/shared/python`.
+
+### TypedDict Definitions
+
+`lambdas/shared/python/shared/types.py` defines typed interfaces matching Section 2's contracts exactly. Every Lambda imports its input/output types from here.
+
+```python
+from __future__ import annotations
+
+from typing import NotRequired, TypedDict
+
+
+class PipelineMetadata(TypedDict):
+    execution_id: str
+    script_attempt: int
+
+
+class DiscoveryOutput(TypedDict):
+    repo_url: str
+    repo_name: str
+    repo_description: str
+    developer_github: str
+    star_count: int
+    language: str
+    discovery_rationale: str
+    key_files: list[str]
+    technical_highlights: list[str]
+
+
+class NotableRepo(TypedDict):
+    name: str
+    description: str
+    stars: int
+    language: str
+
+
+class ResearchOutput(TypedDict):
+    developer_name: str
+    developer_github: str
+    developer_bio: str
+    public_repos_count: int
+    notable_repos: list[NotableRepo]
+    commit_patterns: str
+    technical_profile: str
+    interesting_findings: list[str]
+    hiring_signals: list[str]
+
+
+class ScriptOutput(TypedDict):
+    text: str
+    character_count: int
+    segments: list[str]
+    featured_repo: str
+    featured_developer: str
+    cover_art_suggestion: str
+
+
+class ProducerOutput(TypedDict):
+    """Unified producer output. PASS includes `notes`; FAIL includes `feedback` and `issues`."""
+    verdict: str
+    score: int
+    notes: NotRequired[str]
+    feedback: NotRequired[str]
+    issues: NotRequired[list[str]]
+
+
+class CoverArtOutput(TypedDict):
+    s3_key: str
+    prompt_used: str
+
+
+class TTSOutput(TypedDict):
+    s3_key: str
+    duration_seconds: int
+    character_count: int
+
+
+class PostProductionOutput(TypedDict):
+    s3_mp4_key: str
+    episode_id: int
+    air_date: str
+
+
+class PipelineState(TypedDict, total=False):
+    """Full accumulated state object passed through Step Functions.
+
+    Each key is populated by ResultPath as the pipeline progresses.
+    total=False because early Lambdas see a partial state.
+    """
+    metadata: PipelineMetadata
+    discovery: DiscoveryOutput
+    research: ResearchOutput
+    script: ScriptOutput
+    producer: ProducerOutput
+    cover_art: CoverArtOutput
+    tts: TTSOutput
+    post_production: PostProductionOutput
+```
+
+### Handler Type Annotation Pattern
+
+Every Lambda handler is annotated with its specific input/output types:
+
+```python
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from shared.types import PipelineState, DiscoveryOutput
+
+
+def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOutput:
+    ...
+```
+
+The site Lambda is different — it receives a Lambda Function URL event, not pipeline state:
+
+```python
+def lambda_handler(event: dict[str, object], context: LambdaContext) -> dict[str, object]:
+    ...
+```
+
+### Typing Conventions
+
+- Every function in shared modules (`bedrock.py`, `db.py`, `s3.py`, `logging.py`) must have full type annotations — parameters and return types.
+- No bare `Any` without an explicit `# type: ignore[...]` comment explaining why.
+- `boto3-stubs` (already in devcontainer) provides typed clients: `mypy_boto3_bedrock_runtime`, `mypy_boto3_s3`, `mypy_boto3_secretsmanager`.
+- Use `from __future__ import annotations` at the top of every file for PEP 604 union syntax (`X | Y`) and forward references.
+
+---
+
+## 12. Testing
+
+Tests use pytest with two tiers: unit tests (mocked dependencies, fast, run in CI) and integration tests (real AWS services, run manually).
+
+### Directory Structure
+
+```
+tests/
+├── __init__.py
+├── conftest.py              # Shared fixtures used by all tests
+├── unit/
+│   ├── __init__.py
+│   ├── test_discovery.py    # One test file per Lambda handler
+│   ├── test_research.py
+│   ├── test_script.py
+│   ├── test_producer.py
+│   ├── test_cover_art.py
+│   ├── test_tts.py
+│   ├── test_post_production.py
+│   ├── test_site.py
+│   └── test_shared/         # Tests for shared layer modules
+│       ├── __init__.py
+│       ├── test_bedrock.py
+│       ├── test_db.py
+│       └── test_s3.py
+└── integration/
+    ├── __init__.py
+    ├── test_bedrock_live.py
+    ├── test_s3_live.py
+    └── test_db_live.py
+```
+
+**Naming convention:** `test_{lambda_name}.py` for handler tests, `test_{module}.py` for shared module tests. Test functions: `test_{behavior}_{scenario}` (e.g., `test_discovery_excludes_featured_developers`, `test_script_output_under_character_limit`).
+
+### pytest Configuration
+
+In `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "integration: hits real AWS services (deselect with '-m not integration')",
+]
+```
+
+Run locally:
+```bash
+# Unit tests only (default for development and CI)
+PYTHONPATH=lambdas/shared/python pytest tests/unit/ -v
+
+# Integration tests (requires AWS credentials)
+PYTHONPATH=lambdas/shared/python pytest tests/integration/ -v -m integration
+
+# All tests with coverage
+PYTHONPATH=lambdas/shared/python pytest -v --cov=lambdas --cov-report=term-missing
+```
+
+### Shared Fixtures (`conftest.py`)
+
+```python
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+@pytest.fixture
+def pipeline_metadata() -> dict:
+    return {
+        "execution_id": "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:test-run",
+        "script_attempt": 1,
+    }
+
+
+@pytest.fixture
+def lambda_context() -> MagicMock:
+    ctx = MagicMock()
+    ctx.function_name = "test-function"
+    ctx.memory_limit_in_mb = 512
+    ctx.invoked_function_arn = "arn:aws:lambda:us-east-1:123456789:function:test"
+    ctx.aws_request_id = "test-request-id"
+    return ctx
+
+
+@pytest.fixture
+def mock_bedrock_client():
+    with patch("shared.bedrock.boto3.client") as mock:
+        client = MagicMock()
+        mock.return_value = client
+        yield client
+
+
+@pytest.fixture
+def mock_db_connection():
+    with patch("shared.db.psycopg2.connect") as mock:
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        mock.return_value = conn
+        yield conn
+
+
+@pytest.fixture
+def sample_discovery_output() -> dict:
+    return {
+        "repo_url": "https://github.com/testuser/testrepo",
+        "repo_name": "testrepo",
+        "repo_description": "A test repository",
+        "developer_github": "testuser",
+        "star_count": 7,
+        "language": "Python",
+        "discovery_rationale": "Interesting project with clean architecture.",
+        "key_files": ["README.md", "src/main.py"],
+        "technical_highlights": ["Clean architecture"],
+    }
+
+
+@pytest.fixture
+def sample_research_output() -> dict:
+    return {
+        "developer_name": "Test User",
+        "developer_github": "testuser",
+        "developer_bio": "Builds things.",
+        "public_repos_count": 15,
+        "notable_repos": [
+            {"name": "testrepo", "description": "A test repo", "stars": 7, "language": "Python"}
+        ],
+        "commit_patterns": "Active on weekends",
+        "technical_profile": "Python, Rust",
+        "interesting_findings": ["Built a custom ORM"],
+        "hiring_signals": ["Strong fundamentals"],
+    }
+
+
+@pytest.fixture
+def sample_script_output() -> dict:
+    return {
+        "text": (
+            "**Hype:** Welcome to 0 Stars, 10 out of 10!\n"
+            "**Roast:** Here we go again.\n"
+            "**Phil:** But what does it mean to welcome?"
+        ),
+        "character_count": 107,
+        "segments": [
+            "intro", "core_debate", "developer_deep_dive",
+            "technical_appreciation", "hiring_manager", "outro",
+        ],
+        "featured_repo": "testrepo",
+        "featured_developer": "testuser",
+        "cover_art_suggestion": "A terminal with colorful output",
+    }
+```
+
+### Mocking Strategy
+
+| Dependency | Unit test approach | Integration test approach |
+|-----------|-------------------|-------------------------|
+| Bedrock | `unittest.mock` — patch `boto3.client("bedrock-runtime")` return values. moto does not support Bedrock. | Real Bedrock calls with dev AWS credentials. |
+| S3 | `moto` `@mock_aws` decorator — creates in-memory S3. | Real S3 bucket in dev account with `test/` key prefix. |
+| Postgres | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
+| Exa API | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per query. |
+| ElevenLabs | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per call. |
+| GitHub API | `unittest.mock` — patch `urllib.request.urlopen`. | Real public API (unauthenticated, 60 req/hour). |
+
+### Unit Test Pattern
+
+Example for the Discovery handler:
+
+```python
+import json
+from unittest.mock import MagicMock, patch
+
+
+def test_discovery_returns_valid_output(pipeline_metadata, mock_bedrock_client, mock_db_connection, lambda_context):
+    """Discovery handler returns output matching DiscoveryOutput TypedDict."""
+    # Arrange: no previously featured developers
+    mock_db_connection.cursor.return_value.fetchall.return_value = []
+
+    # Arrange: mock Bedrock response with a valid discovery result
+    mock_bedrock_client.invoke_model.return_value = {
+        "body": MagicMock(read=MagicMock(return_value=json.dumps({
+            "content": [{"type": "text", "text": json.dumps({
+                "repo_url": "https://github.com/someone/something",
+                "repo_name": "something",
+                "repo_description": "A cool project",
+                "developer_github": "someone",
+                "star_count": 3,
+                "language": "Go",
+                "discovery_rationale": "Interesting CLI tool.",
+                "key_files": ["main.go"],
+                "technical_highlights": ["Single-binary design"],
+            })}],
+            "stop_reason": "end_turn",
+        }).encode()))
+    }
+
+    from lambdas.discovery.handler import lambda_handler
+
+    # Act
+    result = lambda_handler({"metadata": pipeline_metadata}, lambda_context)
+
+    # Assert: all required DiscoveryOutput keys present with correct types
+    assert isinstance(result["repo_url"], str)
+    assert result["repo_url"].startswith("https://github.com/")
+    assert isinstance(result["star_count"], int)
+    assert isinstance(result["key_files"], list)
+    assert isinstance(result["technical_highlights"], list)
+
+
+def test_discovery_excludes_featured_developers(pipeline_metadata, mock_bedrock_client, mock_db_connection, lambda_context):
+    """Discovery handler passes featured developers list to Bedrock for exclusion."""
+    mock_db_connection.cursor.return_value.fetchall.return_value = [
+        ("previously-featured-dev",),
+    ]
+    # ... assert the system prompt or tool context includes the exclusion list
+```
+
+### Integration Test Pattern
+
+```python
+import pytest
+
+
+@pytest.mark.integration
+def test_bedrock_invoke_model():
+    """Verify Bedrock Claude invocation works with real credentials."""
+    from shared.bedrock import invoke_model
+
+    result = invoke_model(
+        prompt="Respond with exactly: PING",
+        system_prompt="You are a test helper. Respond with exactly what is asked.",
+    )
+    assert "PING" in result
+```
+
+Integration tests are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
+
+### Per-Handler Test Requirements
+
+Each handler's unit test file must verify:
+
+| Handler | Required test cases |
+|---------|-------------------|
+| Discovery | Output matches `DiscoveryOutput` shape; excludes previously featured developers; handles empty search results |
+| Research | Output matches `ResearchOutput` shape; handles missing GitHub bio; handles user with zero repos |
+| Script | Output matches `ScriptOutput` shape; `character_count` under 5,000; all 6 segments in `segments` list; incorporates producer feedback on retry (`script_attempt > 1`) |
+| Producer | Returns `verdict: "PASS"` or `"FAIL"` with correct fields; FAIL includes `feedback` and `issues`; character count over 5,000 triggers FAIL |
+| Cover Art | Output matches `CoverArtOutput` shape; S3 key follows `episodes/{execution_id}/cover.png` pattern |
+| TTS | Output matches `TTSOutput` shape; correctly parses `**Hype:**`, `**Roast:**`, `**Phil:**` labels; raises exception on malformed script lines |
+| Post-Production | Output matches `PostProductionOutput` shape; writes to `episodes` table; writes to `featured_developers` table |
+| Site | Returns valid HTML with status 200; handles empty episodes table |
+| Shared: bedrock | `invoke_model` returns parsed text; `invoke_with_tools` handles tool-use loop; retries on throttling |
+| Shared: db | `query` returns rows; `execute` returns rowcount; connection uses `sslmode=require` |
+| Shared: s3 | `upload_bytes` calls S3 `put_object`; `generate_presigned_url` returns valid URL |
+
+---
+
+## 13. CI Pipeline
+
+GitHub Actions runs linting, type checking, and unit tests on every push and pull request.
+
+### Workflow File
+
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ruff mypy pytest pytest-cov moto boto3 \
+            psycopg2-binary jinja2 aws-lambda-powertools \
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: mypy type check
+        run: mypy lambdas/
+        env:
+          PYTHONPATH: lambdas/shared/python
+
+      - name: Unit tests
+        run: pytest tests/unit/ -v --tb=short --cov=lambdas --cov-report=term-missing
+        env:
+          PYTHONPATH: lambdas/shared/python
+
+  integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest boto3 psycopg2-binary aws-lambda-powertools \
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
+
+      - name: Integration tests
+        run: pytest tests/integration/ -v -m integration
+        env:
+          PYTHONPATH: lambdas/shared/python
+          DB_CONNECTION_STRING: ${{ secrets.DEV_DB_CONNECTION_STRING }}
+```
+
+### Ruff Configuration
+
+In `pyproject.toml`:
+
+```toml
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+```
+
+Rule sets: `E` (pycodestyle errors), `F` (pyflakes), `I` (isort import ordering), `N` (pep8-naming), `W` (pycodestyle warnings), `UP` (pyupgrade — modernize syntax for Python 3.12).
 
 ---
 
@@ -981,3 +1725,10 @@ Steps to deploy the pipeline from scratch, in order:
 | Script character limit | 5,000 (target 4,000–4,500) |
 | Max script retry attempts | 3 |
 | Tags | `project = "0-stars-podcast"`, `managed_by = "terraform"` |
+| Powertools log level | `INFO` |
+| Lambda `logging_config` log format | `JSON` |
+| Lambda `logging_config` system log level | `WARN` |
+| mypy mode | `strict` |
+| pytest markers | `integration` |
+| Ruff line length | 100 |
+| CI Python version | `3.12` |
