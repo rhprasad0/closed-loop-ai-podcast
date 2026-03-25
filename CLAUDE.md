@@ -42,6 +42,10 @@ When working on prompts, scripts, or any text content for this project:
 - **Specific over general.** Always prefer a concrete technical detail over a vague claim.
 - **The podcast is an "agent system" or "multi-agent workflow."** Not "an AI podcast." This is a portfolio piece.
 
+## Tool Preferences
+
+- **Use Exa search tools for all web searches.** When you need to search the web, use the Exa MCP tools (`web_search_exa`, `web_search_advanced_exa`, `deep_search_exa`, etc.) instead of the generic `WebSearch` tool. Exa provides better results for technical and code-related queries.
+
 ## Useful Commands
 
 ```bash
