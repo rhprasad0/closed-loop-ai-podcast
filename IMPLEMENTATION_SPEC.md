@@ -885,6 +885,8 @@ zip -r ../../build/shared-layer.zip python/
 
 Note: `psycopg2-binary` wheels for `manylinux2014_x86_64` DO work on Lambda. The old advice about needing a special build is outdated for Python 3.12 + `manylinux2014` wheels.
 
+> **TODO:** Add a `lambdas/shared/build.sh` script to the file manifest that automates this (pip install + zip). Currently not in the manifest — the build steps above are manual.
+
 ### Site Lambda
 
 The site Lambda needs `jinja2`. Include it in the deployment package:

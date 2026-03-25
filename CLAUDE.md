@@ -18,7 +18,6 @@ lambdas/            One directory per agent/function, each with handler.py and p
 lambdas/shared/     Lambda Layer source — Bedrock client, DB helpers, S3 utils
 lambdas/site/       Dynamic website Lambda (Function URL + CloudFront)
 layers/ffmpeg/      ffmpeg binary packaged as a Lambda Layer
-site/               Static website assets (CSS, images)
 sql/                Database schema definitions
 ```
 
@@ -95,8 +94,7 @@ Three AI personas: **Hype** (optimist), **Roast** (British cynic), **Phil** (phi
 
 ## Terraform Conventions
 
-- All resources are in `terraform/`. No modules outside of `terraform/modules/`.
-- The reusable `modules/lambda/` module handles: `archive_file` packaging, IAM role creation, CloudWatch log group, and attaching layers.
+- All resources are in `terraform/`. No modules — every Lambda defined inline for simplicity.
 - Secrets (API keys) are in Secrets Manager, referenced by Lambda environment variables.
 - The Step Functions state machine ASL definition lives in `terraform/step-functions.tf` as a `jsonencode()` block, not a separate JSON file.
 - The website Lambda Function URL and CloudFront distribution are in `terraform/site.tf`.
