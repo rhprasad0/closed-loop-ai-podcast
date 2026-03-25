@@ -836,7 +836,7 @@ response = client.invoke_model(
 result = json.loads(response["body"].read())
 text = result["content"][0]["text"]
 
-# With tool use (Discovery, Research)
+# With tool use (Discovery, Research) — agentic loop
 response = client.invoke_model(
     modelId="us.anthropic.claude-sonnet-4-6",
     contentType="application/json",
@@ -849,7 +849,45 @@ response = client.invoke_model(
         "tools": tool_definitions
     })
 )
-# Handle tool_use content blocks, execute tools, send results back in a loop
+result = json.loads(response["body"].read())
+
+# Loop until the model stops calling tools
+while result["stop_reason"] == "tool_use":
+    # Response content contains text AND tool_use blocks:
+    # {"type": "tool_use", "id": "toolu_abc123", "name": "exa_search", "input": {...}}
+    tool_use_blocks = [b for b in result["content"] if b["type"] == "tool_use"]
+
+    # Execute each tool, build tool_result messages
+    tool_results = []
+    for block in tool_use_blocks:
+        output = execute_tool(block["name"], block["input"])
+        tool_results.append({
+            "type": "tool_result",
+            "tool_use_id": block["id"],
+            "content": json.dumps(output)
+        })
+
+    # Append assistant turn (full content) and user turn (tool results)
+    messages.append({"role": "assistant", "content": result["content"]})
+    messages.append({"role": "user", "content": tool_results})
+
+    # Re-invoke with updated conversation
+    response = client.invoke_model(
+        modelId="us.anthropic.claude-sonnet-4-6",
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": messages,
+            "tools": tool_definitions
+        })
+    )
+    result = json.loads(response["body"].read())
+
+# stop_reason == "end_turn" — extract final text
+text = next(b["text"] for b in result["content"] if b["type"] == "text")
 ```
 
 ### AWS Bedrock — Nova Canvas (Cover Art)
@@ -926,7 +964,7 @@ The Discovery agent uses Bedrock's tool-use capability to call Exa. Define Exa s
     "type": "object",
     "properties": {
       "query": {"type": "string", "description": "Natural language search query"},
-      "category": {"type": "string", "enum": ["github", "general"], "description": "Search category"},
+      "include_domains": {"type": "array", "items": {"type": "string"}, "description": "Limit results to these domains (e.g. [\"github.com\"])"},
       "num_results": {"type": "integer", "description": "Number of results to return (max 10)"},
       "start_published_date": {"type": "string", "description": "ISO date, filter results after this date"},
       "exclude_text": {"type": "string", "description": "Exclude results containing this text"}
@@ -936,7 +974,7 @@ The Discovery agent uses Bedrock's tool-use capability to call Exa. Define Exa s
 }
 ```
 
-When Bedrock returns a `tool_use` block for `exa_search`, the Lambda executes the actual Exa API call:
+When Bedrock returns a `tool_use` block for `exa_search`, the Lambda translates snake_case tool inputs to camelCase and executes the actual Exa API call:
 
 ```
 POST https://api.exa.ai/search
@@ -947,12 +985,27 @@ Headers:
 Request body:
 {
   "query": "...",
-  "category": "github",
+  "includeDomains": ["github.com"],
   "numResults": 10,
   "startPublishedDate": "2024-01-01",
   "contents": {
     "text": true
   }
+}
+
+Response (200 OK):
+{
+  "requestId": "...",
+  "results": [
+    {
+      "title": "owner/repo-name",
+      "url": "https://github.com/owner/repo-name",
+      "id": "...",
+      "publishedDate": "2024-06-15T00:00:00.000Z",
+      "author": "...",
+      "text": "README and repo description text..."
+    }
+  ]
 }
 ```
 
@@ -984,7 +1037,7 @@ Tools defined for Bedrock:
       "type": "object",
       "properties": {
         "username": {"type": "string"},
-        "sort": {"type": "string", "enum": ["stars", "updated", "created"]},
+        "sort": {"type": "string", "enum": ["updated", "pushed", "created"]},
         "per_page": {"type": "integer"}
       },
       "required": ["username"]
@@ -1013,15 +1066,39 @@ Tools defined for Bedrock:
       },
       "required": ["owner", "repo"]
     }
+  },
+  {
+    "name": "search_repositories",
+    "description": "Search GitHub repositories by query. Supports sorting by stars.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "description": "Search query (e.g. 'user:username' or 'topic:ml')"},
+        "sort": {"type": "string", "enum": ["stars", "forks", "updated"]},
+        "per_page": {"type": "integer"}
+      },
+      "required": ["query"]
+    }
   }
 ]
 ```
 
-API endpoints used when executing tool calls:
+API endpoints and key response fields:
+
 - `GET https://api.github.com/users/{username}`
+  → `login`, `name`, `bio`, `public_repos`, `followers`, `created_at`, `html_url`
+
 - `GET https://api.github.com/users/{username}/repos?sort={sort}&per_page={per_page}`
+  → Array of repo objects (see fields below)
+
 - `GET https://api.github.com/repos/{owner}/{repo}`
-- `GET https://api.github.com/repos/{owner}/{repo}/readme` (returns base64-encoded content)
+  → `name`, `full_name`, `description`, `stargazers_count`, `forks_count`, `language`, `topics`, `created_at`, `updated_at`, `html_url`
+
+- `GET https://api.github.com/repos/{owner}/{repo}/readme`
+  → `content` (base64-encoded), `encoding` ("base64")
+
+- `GET https://api.github.com/search/repositories?q={query}&sort={sort}&per_page={per_page}`
+  → `total_count`, `items` (array of repo objects with same fields as above)
 
 ---
 
