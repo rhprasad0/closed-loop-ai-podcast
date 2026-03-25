@@ -1125,7 +1125,7 @@ Trace a full pipeline execution across all Lambdas:
 ```
 filter correlation_id = "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:abc-123"
 | sort @timestamp asc
-| display service, level, message
+| fields service, level, message
 ```
 
 Find cold starts across all pipeline functions:
@@ -1149,6 +1149,10 @@ resource "aws_lambda_function" "discovery" {
     system_log_level      = "WARN"
   }
 
+  tracing_config {
+    mode = "Active"
+  }
+
   environment {
     variables = {
       POWERTOOLS_SERVICE_NAME = "discovery"
@@ -1159,12 +1163,15 @@ resource "aws_lambda_function" "discovery" {
 
   depends_on = [
     aws_iam_role_policy_attachment.discovery_logs,
+    aws_iam_role_policy_attachment.discovery_xray,
     aws_cloudwatch_log_group.discovery
   ]
 }
 ```
 
 The `logging_config` block ensures Lambda system logs (platform start/end/report events, extension logs) are also JSON-formatted — not just Powertools application logs. Both are needed for fully structured CloudWatch output.
+
+The `tracing_config { mode = "Active" }` block enables X-Ray active tracing on each Lambda. This populates the `_X_AMZN_TRACE_ID` environment variable that Powertools reads to include `xray_trace_id` in every structured log line. Without this block, the `xray_trace_id` field silently omits from logs. Each Lambda execution role must have `xray:PutTraceSegments` and `xray:PutTelemetryRecords` permissions — attach the `AWSXrayWriteOnlyAccess` managed policy or an equivalent inline policy.
 
 ### Error Visibility
 
@@ -1580,6 +1587,8 @@ def test_bedrock_invoke_model():
 
 Integration tests are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
 
+**Resource isolation:** Integration tests must use unique prefixes for S3 keys and DB test data (e.g., the GitHub Actions run ID or commit SHA) to prevent conflicts when multiple CI runs execute in parallel. Clean up test resources in a `finally` block or pytest `teardown` fixture.
+
 ### Per-Handler Test Requirements
 
 Each handler's unit test file must verify:
@@ -1629,9 +1638,17 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff mypy pytest pytest-cov moto boto3 \
+          pip install ruff mypy pytest pytest-cov "moto[s3]" boto3 \
             psycopg2-binary jinja2 aws-lambda-powertools \
             "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform validate
+        run: |
+          cd terraform
+          terraform init -backend=false
+          terraform validate
 
       - name: Ruff lint
         run: ruff check .
