@@ -167,7 +167,7 @@ Every file below must be created. No other files should be created.
 | File | Purpose |
 |------|---------|
 | `layers/ffmpeg/build.sh` | Shell script that downloads a prebuilt Lambda-compatible ffmpeg binary (from `johnvansickle.com/ffmpeg` — the standard source for static ffmpeg builds), creates the Lambda Layer directory structure (`bin/ffmpeg`), and zips it. Output: `layers/ffmpeg/ffmpeg-layer.zip`. Run once manually before `terraform apply`. |
-| `sql/schema.sql` | DDL for all three tables: `episodes`, `episode_metrics`, `featured_developers`. Includes column types, constraints, foreign keys, and indices. Run manually against the RDS instance before first pipeline execution. |
+| `sql/schema.sql` | DDL for all three tables: `episodes`, `episode_metrics`, `featured_developers`. Includes column types, constraints, foreign keys, and indices. Create the `zerostars` database first, then run this DDL against it before first pipeline execution. |
 | `README.md` | Project README. Already exists — no changes needed during implementation. |
 
 ---
@@ -1104,11 +1104,12 @@ API endpoints and key response fields:
 
 ## 6. Database Schema
 
-DDL for `sql/schema.sql`. Run manually against the RDS Postgres instance before first pipeline execution.
+DDL for `sql/schema.sql`. Create the `zerostars` database on the existing RDS Postgres instance first, then run this DDL against it before first pipeline execution.
 
 ```sql
 -- 0 Stars, 10/10 — Database Schema
--- Run against the existing RDS Postgres instance.
+-- Prerequisites: CREATE DATABASE zerostars on the RDS instance, then connect to it.
+-- Run this DDL against the zerostars database.
 
 CREATE TABLE IF NOT EXISTS episodes (
     episode_id      SERIAL PRIMARY KEY,
@@ -1345,7 +1346,7 @@ The devcontainer Dockerfile installs these automatically. They support type chec
 Steps to deploy the pipeline from scratch, in order:
 
 1. **Run `layers/ffmpeg/build.sh`** to create `ffmpeg-layer.zip`.
-2. **Run `sql/schema.sql`** against the RDS Postgres instance.
+2. **Create the `zerostars` database** on the RDS Postgres instance, then **run `sql/schema.sql`** against it.
 3. **Build the shared layer** (install psycopg2, zip).
 4. **Run `terraform init` and `terraform apply`** in `terraform/`.
 5. **Enable Bedrock model access** for Claude and Nova Canvas in the AWS console (this cannot be done via Terraform).
