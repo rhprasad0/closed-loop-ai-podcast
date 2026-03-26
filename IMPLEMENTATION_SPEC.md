@@ -65,7 +65,9 @@ Every file below must be created. No other files should be created.
 │           ├── base.html
 │           └── index.html
 ├── layers/
-│   └── ffmpeg/
+│   ├── ffmpeg/
+│   │   └── build.sh
+│   └── psql/
 │       └── build.sh
 ├── sql/
 │   └── schema.sql
@@ -90,6 +92,8 @@ Every file below must be created. No other files should be created.
 │   └── integration/
 │       ├── __init__.py
 │       ├── test_bedrock_live.py
+│       ├── test_discovery_live.py
+│       ├── test_discovery_e2e.py
 │       ├── test_s3_live.py
 │       └── test_db_live.py
 └── README.md
@@ -160,6 +164,8 @@ Every file below must be created. No other files should be created.
 | `tests/unit/test_shared/test_s3.py` | Unit tests for shared S3 helper. |
 | `tests/integration/test_bedrock_live.py` | Integration tests hitting real Bedrock. Marked `@pytest.mark.integration`. |
 | `tests/integration/test_s3_live.py` | Integration tests hitting real S3. Marked `@pytest.mark.integration`. |
+| `tests/integration/test_discovery_live.py` | Integration tests for Discovery external deps (psql, SSM, GitHub API). Marked `@pytest.mark.integration`. |
+| `tests/integration/test_discovery_e2e.py` | End-to-end test: invokes Discovery handler with real Bedrock, Exa, psql, GitHub. Marked `@pytest.mark.integration`, skipped by default. |
 | `tests/integration/test_db_live.py` | Integration tests hitting real Postgres. Marked `@pytest.mark.integration`. |
 
 ### Other Files
@@ -224,9 +230,18 @@ The state object grows as it passes through the pipeline. Each key is populated 
 **Reads from state:**
 - `$.metadata.execution_id` — for logging/tracing
 
-**Reads from Postgres:**
+**Reads from Postgres (via Bedrock tool use):**
 - `featured_developers` — all rows, to exclude previously featured developers from search
-- `episodes` + `episode_metrics` — joined, to identify which project types (language, category) drove higher engagement and bias search accordingly
+- `episodes` — `repo_url` column, to avoid re-featuring the same repository
+
+The Discovery agent queries Postgres directly using a `query_postgres` Bedrock tool backed by the `psql` binary (packaged as a Lambda layer). The handler fetches the DB connection string from SSM Parameter Store (`/zerostars/db-connection-string`) at runtime, not from an environment variable.
+
+> **Deferred:** Querying `episode_metrics` to bias search toward better-performing project types ships as a separate feature. The Discovery agent does not read `episode_metrics` in v1.
+
+**Bedrock tools:** The Discovery agent has three tools available during its agentic loop:
+1. `exa_search` — neural search via Exa API to find candidate repos (see §5 Exa Search API)
+2. `query_postgres` — read-only SQL against the podcast database via psql subprocess (see §5 Discovery Postgres Tool)
+3. `get_github_repo` — GitHub REST API to verify star counts and repo metadata (see §5 Discovery GitHub Tool)
 
 **Returns:** (placed at `$.discovery` by Step Functions)
 
@@ -236,7 +251,7 @@ The state object grows as it passes through the pipeline. Each key is populated 
   "repo_name": "repo-name",
   "repo_description": "Short description from GitHub",
   "developer_github": "username",
-  "star_count": 12,
+  "star_count": 7,
   "language": "Python",
   "discovery_rationale": "Why this repo was selected — what made it interesting, how it scored against search objectives.",
   "key_files": ["list", "of", "interesting", "files", "or", "dirs"],
@@ -718,6 +733,7 @@ No modules. Every resource defined inline. This section maps each Terraform reso
 |----------|------|-------|
 | Shared Lambda Layer | `aws_lambda_layer_version` | Source: `lambdas/shared/` |
 | ffmpeg Lambda Layer | `aws_lambda_layer_version` | Source: `layers/ffmpeg/ffmpeg-layer.zip` (built by `build.sh`) |
+| psql Lambda Layer | `aws_lambda_layer_version` | Source: `layers/psql/psql-layer.zip` (built by `build.sh`). Provides `/opt/bin/psql` and `/opt/lib/libpq.so*`. |
 | Per-Lambda (×8): | | |
 | — Deployment package | `data "archive_file"` | Zips `handler.py` + `prompts/` dir |
 | — Function | `aws_lambda_function` | Python 3.12, layers attached, env vars set, `logging_config` block, `depends_on` log group |
@@ -746,7 +762,7 @@ logging_config {
 
 | Lambda | Extra permissions beyond CloudWatch Logs |
 |--------|------------------------------------------|
-| Discovery | `bedrock:InvokeModel`, Secrets Manager read (Exa key) |
+| Discovery | `bedrock:InvokeModel`, Secrets Manager read (Exa key), SSM `GetParameter` (`/zerostars/db-connection-string`), psql layer attached |
 | Research | `bedrock:InvokeModel` |
 | Script | `bedrock:InvokeModel` |
 | Producer | `bedrock:InvokeModel` |
@@ -835,7 +851,56 @@ response = client.invoke_model(
 result = json.loads(response["body"].read())
 text = result["content"][0]["text"]
 
-# With tool use (Discovery, Research) — agentic loop
+# With tool use (Discovery, Research) — agentic loop via shared/bedrock.py
+#
+# The invoke_with_tools() function takes a tool_executor callback so each
+# Lambda provides its own tool implementations. This keeps bedrock.py generic.
+#
+# Signature:
+#   invoke_with_tools(
+#       user_message: str,
+#       system_prompt: str,
+#       tools: list[dict],
+#       tool_executor: Callable[[str, dict], str],  # (tool_name, tool_input) -> JSON string
+#       model_id: str = DEFAULT_MODEL_ID,
+#       max_turns: int = 25,  # safety valve on loop iterations
+#   ) -> str
+#
+# The function loops internally:
+#   1. Invoke Bedrock with tools
+#   2. If stop_reason == "tool_use": extract tool_use blocks, call tool_executor
+#      for each, append tool_result messages, re-invoke
+#   3. If stop_reason == "end_turn": return the text response
+#   4. Retry on ThrottlingException with exponential backoff (3 retries, 1s base)
+#
+# Example handler usage (Discovery):
+
+from shared.bedrock import invoke_with_tools
+
+def _execute_tool(tool_name: str, tool_input: dict) -> str:
+    """Dispatch to the right tool function, return JSON string."""
+    if tool_name == "exa_search":
+        result = _execute_exa_search(tool_input)
+    elif tool_name == "query_postgres":
+        result = _execute_query_postgres(tool_input)
+    elif tool_name == "get_github_repo":
+        result = _execute_get_github_repo(tool_input)
+    else:
+        result = {"error": f"Unknown tool: {tool_name}"}
+    return json.dumps(result)
+
+result_text = invoke_with_tools(
+    user_message="Find one underrated GitHub repository to feature.",
+    system_prompt=system_prompt,
+    tools=TOOL_DEFINITIONS,
+    tool_executor=_execute_tool,
+)
+
+# Tool errors should return {"error": "..."} dicts instead of raising,
+# so the agent sees errors and can adapt (retry, pick a different candidate).
+
+# The underlying Bedrock API call is invoke_model with the Anthropic
+# Messages API body format — tools array in the body, stop_reason in response:
 response = client.invoke_model(
     modelId="us.anthropic.claude-sonnet-4-6",
     contentType="application/json",
@@ -849,44 +914,8 @@ response = client.invoke_model(
     })
 )
 result = json.loads(response["body"].read())
-
-# Loop until the model stops calling tools
-while result["stop_reason"] == "tool_use":
-    # Response content contains text AND tool_use blocks:
-    # {"type": "tool_use", "id": "toolu_abc123", "name": "exa_search", "input": {...}}
-    tool_use_blocks = [b for b in result["content"] if b["type"] == "tool_use"]
-
-    # Execute each tool, build tool_result messages
-    tool_results = []
-    for block in tool_use_blocks:
-        output = execute_tool(block["name"], block["input"])
-        tool_results.append({
-            "type": "tool_result",
-            "tool_use_id": block["id"],
-            "content": json.dumps(output)
-        })
-
-    # Append assistant turn (full content) and user turn (tool results)
-    messages.append({"role": "assistant", "content": result["content"]})
-    messages.append({"role": "user", "content": tool_results})
-
-    # Re-invoke with updated conversation
-    response = client.invoke_model(
-        modelId="us.anthropic.claude-sonnet-4-6",
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "system": system_prompt,
-            "messages": messages,
-            "tools": tool_definitions
-        })
-    )
-    result = json.loads(response["body"].read())
-
-# stop_reason == "end_turn" — extract final text
-text = next(b["text"] for b in result["content"] if b["type"] == "text")
+# result["stop_reason"] is "tool_use" or "end_turn"
+# result["content"] contains text blocks and/or tool_use blocks
 ```
 
 ### AWS Bedrock — Nova Canvas (Cover Art)
@@ -1008,9 +1037,105 @@ Response (200 OK):
 }
 ```
 
+### Discovery Postgres Tool (`query_postgres`)
+
+Used by: Discovery Lambda (via Bedrock tool use).
+
+The Discovery agent queries Postgres directly through a `psql` subprocess to check whether candidate projects/developers have already been featured. The `psql` binary is provided by the psql Lambda layer (see §8).
+
+**Tool definition for Bedrock:**
+
+```json
+{
+  "name": "query_postgres",
+  "description": "Run a read-only SQL query against the podcast database. Only SELECT statements are allowed. Returns rows as pipe-delimited text.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "sql": {"type": "string", "description": "A SELECT SQL query to execute"}
+    },
+    "required": ["sql"]
+  }
+}
+```
+
+**Handler implementation:** When Bedrock returns a `tool_use` block for `query_postgres`, the handler:
+
+1. **Enforces read-only:** Checks that the SQL starts with `SELECT` (case-insensitive, after stripping whitespace). Rejects INSERT, UPDATE, DELETE, DROP, etc. with an error.
+2. **Fetches connection string:** From SSM Parameter Store at `/zerostars/db-connection-string` with `WithDecryption=True`. Cached in a module-level global across warm invocations.
+3. **Runs psql subprocess:**
+
+```python
+result = subprocess.run(
+    ["/opt/bin/psql", conn_str, "-c", sql, "--no-align", "--tuples-only", "--pset", "null=(null)"],
+    capture_output=True, text=True, timeout=15,
+)
+```
+
+- `--no-align --tuples-only` strips headers and alignment, producing clean pipe-delimited output the model can parse.
+- `--pset null=(null)` renders NULL as literal `(null)` instead of empty string.
+- Timeout of 15 seconds prevents runaway queries from consuming the Lambda's 300s budget.
+- On psql error, returns `{"error": "<stderr truncated to 500 chars>"}`.
+- On success, returns `{"rows": "<stdout>"}`.
+
+### Discovery GitHub Tool (`get_github_repo`)
+
+Used by: Discovery Lambda (via Bedrock tool use).
+
+The Discovery agent uses this tool to verify star counts and repo metadata before selecting a candidate. This is critical — Exa search results do not include exact star counts.
+
+**Tool definition for Bedrock:**
+
+```json
+{
+  "name": "get_github_repo",
+  "description": "Get metadata for a GitHub repository including star count, language, description, topics, and activity dates.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "owner": {"type": "string", "description": "Repository owner (GitHub username)"},
+      "repo": {"type": "string", "description": "Repository name"}
+    },
+    "required": ["owner", "repo"]
+  }
+}
+```
+
+**Handler implementation:** When Bedrock returns a `tool_use` block for `get_github_repo`, the handler calls the GitHub REST API:
+
+```
+GET https://api.github.com/repos/{owner}/{repo}
+Headers:
+  Accept: application/vnd.github.v3+json
+  User-Agent: zerostars-discovery-agent
+```
+
+The `User-Agent` header is required — GitHub returns 403 without it. No auth key needed (public API, rate limited to 60 req/hour unauthenticated).
+
+The handler returns a curated subset of the response (the full GitHub response is ~3KB and would inflate the Bedrock conversation):
+
+```python
+{
+    "name": data["name"],
+    "full_name": data["full_name"],
+    "description": data["description"],
+    "stargazers_count": data["stargazers_count"],
+    "forks_count": data["forks_count"],
+    "language": data["language"],
+    "topics": data["topics"],
+    "created_at": data["created_at"],
+    "pushed_at": data["pushed_at"],
+    "open_issues_count": data["open_issues_count"],
+    "license": data["license"]["spdx_id"] if data["license"] else None,
+    "owner_type": data["owner"]["type"],  # "User" vs "Organization"
+    "html_url": data["html_url"],
+    "default_branch": data["default_branch"],
+}
+```
+
 ### GitHub API
 
-Used by: Research Lambda (via Bedrock tool use).
+Used by: Discovery Lambda (`get_github_repo` tool) and Research Lambda (via Bedrock tool use).
 
 Public API, no auth key needed (rate limited to 60 req/hour for unauthenticated).
 
@@ -1158,20 +1283,154 @@ The content for each Lambda's `prompts/` directory. These are bundled into the L
 
 ### `lambdas/discovery/prompts/discovery.md`
 
-```markdown
-TODO: Discovery agent system prompt.
+````markdown
+# Discovery Agent — "0 Stars, 10/10"
 
-Key content to include:
-- Role: You are the Discovery agent for "0 Stars, 10/10"
-- Search criteria: solo developers, hobby projects, under ~50 stars, not AI/ML tools or infrastructure, recent (2024-2025)
-- Prioritize: charm, personality, interesting technical choices, good README
-- Use the exa_search tool to find candidates
-- You will receive episode history (previously featured developers) and episode metrics (what performed well) as context
-- Use metrics to bias search: if episodes about CLI tools got more engagement, weight toward CLI tools
-- Never re-feature a developer already in the featured_developers list
-- Output: select ONE repo and explain why
-- Return structured output matching the discovery interface contract
+You are the Discovery agent for "0 Stars, 10/10," a comedy podcast where three AI personas (Hype, Roast, and Phil) discuss small, obscure GitHub projects that almost nobody has heard of and hype up the solo developers who built them.
+
+Your job: find ONE GitHub repository to feature on this week's episode.
+
+## What Makes a Good Pick
+
+The ideal repo is a small hobby project built by a solo developer. It should be:
+
+- **Under 10 stars.** This is a hard ceiling. Do not select any repo with 10 or more stars. Verify the exact count with the `get_github_repo` tool before committing to a pick.
+- **A solo developer's work.** One person built this, not a team or organization. Look for personal GitHub accounts, not org repos.
+- **A hobby or side project.** Something built for fun, curiosity, or to scratch a personal itch. Not a work project, not a startup MVP.
+- **Recently active.** The repo should have commits within the last 12 months. Do not pick abandoned projects with no activity since 2023.
+- **Technically interesting.** The project should have at least one notable technical decision, unusual approach, or clever solution worth discussing on the podcast. A CRUD app with no distinctive features is not interesting.
+- **Has a README.** The README does not need to be long, but it should exist and explain what the project does. A bare repo with no documentation gives the podcast hosts nothing to work with.
+- **Has personality.** The best picks are projects where you can sense the developer's personality — a witty README, an unusual project idea, creative naming, or an opinionated design choice.
+
+## What to Avoid
+
+Do NOT select repos that fall into these categories:
+
+- **AI/ML tools, wrappers, or chatbots.** No LLM wrappers, no "ChatGPT but for X," no ML model training scripts, no AI agent frameworks. The podcast covers underrated projects, and AI slop is the opposite of underrated — it is oversaturated.
+- **Infrastructure and DevOps tooling.** No Terraform modules, no Kubernetes operators, no CI/CD helpers, no Docker utilities. These are useful but not entertaining podcast material.
+- **Awesome lists or curated link collections.** These are not projects.
+- **Forks with minimal changes.** The project should be original work.
+- **Tutorial output or course homework.** No "my-first-react-app" or "udemy-python-project."
+- **Crypto, NFT, or blockchain projects.**
+- **Empty or skeleton repos.** The repo must have substantive code.
+
+## Your Tools
+
+You have three tools:
+
+### `exa_search`
+Neural search via the Exa API. Use this to discover candidate repos. Tips:
+- Always set `include_domains` to `["github.com"]` to limit results to GitHub repos.
+- Use specific, descriptive search queries rather than generic ones. "Python CLI tool for converting markdown to slides" is better than "cool Python project."
+- Run multiple searches with different queries to build a diverse candidate pool. A single search rarely surfaces the best pick on the first try.
+- Use `start_published_date` to filter for recent repos (set to at least "2024-01-01").
+- Try varied angles: search by language, by problem domain, by project type. For example, one search for "Rust terminal game," another for "Python automation tool for personal use," another for "Go CLI utility hobbyist project."
+
+### `query_postgres`
+Runs a read-only SQL query against the podcast database. Use this to check which developers and repos have already been featured on the show.
+
+The database has these tables:
+
+```sql
+-- All previously featured episodes
+episodes (
+    episode_id              SERIAL PRIMARY KEY,
+    air_date                DATE,
+    repo_url                TEXT,          -- e.g. "https://github.com/user/repo"
+    repo_name               TEXT,          -- e.g. "repo"
+    developer_github        TEXT,          -- e.g. "username"
+    developer_name          TEXT,
+    star_count_at_recording INTEGER
+)
+
+-- Dedup list: every developer who has appeared on the show
+featured_developers (
+    developer_github TEXT PRIMARY KEY,  -- e.g. "username"
+    episode_id       INTEGER,
+    featured_date    DATE
+)
 ```
+
+**Example queries you should run:**
+
+```sql
+-- Get all previously featured developer usernames
+SELECT developer_github FROM featured_developers;
+
+-- Get all previously featured repo URLs
+SELECT repo_url FROM episodes;
+
+-- Check if a specific developer was already featured
+SELECT developer_github FROM featured_developers WHERE developer_github = 'someuser';
+```
+
+**IMPORTANT:** Only run SELECT queries. Never run INSERT, UPDATE, DELETE, DROP, or any data-modifying statement.
+
+### `get_github_repo`
+Fetches metadata for a specific GitHub repository. Use this to verify star counts, check activity dates, get the description, and confirm the repo is real and public. Provide `owner` and `repo` as inputs.
+
+Returns fields including: `stargazers_count`, `description`, `language`, `topics`, `created_at`, `pushed_at`, `forks_count`, `open_issues_count`, `license`, `default_branch`, and `owner_type` ("User" vs "Organization").
+
+## The Never-Re-Feature Rule
+
+**A developer must never appear on the podcast twice.** Before selecting a repo, you MUST check the `featured_developers` table to confirm the developer has not been featured before. If they have, discard that candidate and find another.
+
+Similarly, never feature the same repository twice. Check the `episodes` table for the repo URL.
+
+## Your Search Strategy
+
+Follow this process:
+
+1. **Query the database first.** Run `SELECT developer_github FROM featured_developers;` and `SELECT repo_url FROM episodes;` to get the exclusion lists. Keep these in mind for all subsequent steps.
+
+2. **Run multiple Exa searches.** Use at least 3 different search queries with varied angles. Try different languages, project types, and problem domains. Cast a wide net.
+
+3. **Build a candidate shortlist.** From the search results, identify 3-5 repos that look promising based on their titles and descriptions.
+
+4. **Verify each candidate.** For each candidate on your shortlist, use `get_github_repo` to check:
+   - Star count is under 10 (hard requirement)
+   - The repo has been pushed to within the last 12 months
+   - There is a description
+   - The repo belongs to a personal account, not an organization
+
+5. **Check against the database.** For each verified candidate, confirm the developer is not in `featured_developers` and the repo URL is not in `episodes`.
+
+6. **Select the best one.** From the candidates that passed all checks, pick the one that would make the most entertaining podcast episode. Prioritize personality, technical interest, and storytelling potential.
+
+## Output Format
+
+After completing your search, return your selection as a JSON object with exactly these fields:
+
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "repo_name": "repo",
+  "repo_description": "The repo's description from GitHub",
+  "developer_github": "owner",
+  "star_count": 7,
+  "language": "Python",
+  "discovery_rationale": "2-3 sentences explaining why this repo was selected. What makes it interesting? What would make good podcast material? Why would the hosts have fun discussing it?",
+  "key_files": ["README.md", "src/main.py", "config.yaml"],
+  "technical_highlights": [
+    "Notable technical decision or pattern #1",
+    "Notable technical decision or pattern #2"
+  ]
+}
+```
+
+**Field requirements:**
+- `repo_url`: Full GitHub URL. Must start with "https://github.com/".
+- `repo_name`: Just the repo name, not the full path.
+- `repo_description`: The description from GitHub, not your own summary.
+- `developer_github`: The GitHub username (owner). Must NOT be in the featured_developers table.
+- `star_count`: Integer from `get_github_repo`. Must be under 10.
+- `language`: Primary language from GitHub.
+- `discovery_rationale`: Your genuine reasoning. Be specific about what caught your eye. Do not use generic praise.
+- `key_files`: 2-5 files or directories in the repo that are worth the Research agent investigating. Identify the interesting parts, not boilerplate.
+- `technical_highlights`: 1-3 specific technical observations. "Uses SQLite as an application file format" is good. "Well-structured code" is bad.
+
+Return ONLY the JSON object. No markdown fencing, no preamble, no explanation outside the JSON.
+````
 
 ### `lambdas/research/prompts/research.md`
 
@@ -1295,7 +1554,75 @@ import urllib.request
 
 ### Other Pipeline Lambdas
 
-Discovery, Research, Script, Producer, Cover Art — these only need `boto3` (pre-installed on Lambda) and the shared layer. No additional dependencies.
+Research, Script, Producer, Cover Art — these only need `boto3` (pre-installed on Lambda) and the shared layer. No additional dependencies.
+
+Discovery additionally needs the psql Lambda layer (see below) and uses `urllib.request` from stdlib for the Exa and GitHub API calls — no extra pip dependencies.
+
+### psql Layer
+
+Built by `layers/psql/build.sh`. Provides the `psql` binary and `libpq` shared library for Lambda (Amazon Linux 2023, x86_64). Used by the Discovery Lambda's `query_postgres` tool to run SQL queries via subprocess.
+
+Lambda extracts layers to `/opt`. The layer structure places `bin/psql` at `/opt/bin/psql` (in Lambda's default `PATH`) and `lib/libpq.so*` at `/opt/lib/` (in Lambda's default `LD_LIBRARY_PATH`). No additional environment configuration needed.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build a Lambda layer containing the psql binary for Amazon Linux 2023 (x86_64).
+# The binary and libpq are extracted from official PostgreSQL PGDG RPMs for RHEL 9,
+# which are binary-compatible with AL2023.
+#
+# Layer structure:
+#   bin/psql      -> /opt/bin/psql on Lambda (in default PATH)
+#   lib/libpq.so* -> /opt/lib/ on Lambda (in default LD_LIBRARY_PATH)
+
+OUTPUT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUILD_DIR=$(mktemp -d)
+POSTGRES_VERSION="16"
+AL2023_REPO="https://download.postgresql.org/pub/repos/yum/${POSTGRES_VERSION}/redhat/rhel-9-x86_64"
+
+echo "Downloading PostgreSQL ${POSTGRES_VERSION} RPMs for RHEL 9 (AL2023-compatible)..."
+
+# Download the psql binary RPM
+RPM_URL=$(curl -sL "${AL2023_REPO}/" \
+    | grep -oP "postgresql${POSTGRES_VERSION}-${POSTGRES_VERSION}\.[0-9.]+-[0-9]+PGDG\.rhel9\.x86_64\.rpm" \
+    | sort -V | tail -1)
+if [ -z "$RPM_URL" ]; then
+    echo "ERROR: Could not find PostgreSQL RPM in PGDG repo."
+    exit 1
+fi
+echo "  psql RPM: $RPM_URL"
+curl -sL "${AL2023_REPO}/${RPM_URL}" -o "$BUILD_DIR/postgresql.rpm"
+
+# Download the libpq shared library RPM
+LIBPQ_URL=$(curl -sL "${AL2023_REPO}/" \
+    | grep -oP "postgresql${POSTGRES_VERSION}-libs-${POSTGRES_VERSION}\.[0-9.]+-[0-9]+PGDG\.rhel9\.x86_64\.rpm" \
+    | sort -V | tail -1)
+if [ -z "$LIBPQ_URL" ]; then
+    echo "ERROR: Could not find PostgreSQL libs RPM in PGDG repo."
+    exit 1
+fi
+echo "  libpq RPM: $LIBPQ_URL"
+curl -sL "${AL2023_REPO}/${LIBPQ_URL}" -o "$BUILD_DIR/postgresql-libs.rpm"
+
+echo "Extracting RPMs..."
+cd "$BUILD_DIR"
+rpm2cpio postgresql.rpm | cpio -idmv 2>/dev/null
+rpm2cpio postgresql-libs.rpm | cpio -idmv 2>/dev/null
+
+echo "Packaging Lambda layer..."
+mkdir -p "$BUILD_DIR/layer/bin" "$BUILD_DIR/layer/lib"
+cp "$BUILD_DIR/usr/pgsql-${POSTGRES_VERSION}/bin/psql" "$BUILD_DIR/layer/bin/psql"
+cp "$BUILD_DIR/usr/pgsql-${POSTGRES_VERSION}/lib/"libpq.so* "$BUILD_DIR/layer/lib/"
+chmod +x "$BUILD_DIR/layer/bin/psql"
+
+cd "$BUILD_DIR/layer"
+zip -r "$OUTPUT_DIR/psql-layer.zip" .
+
+echo "Done: $OUTPUT_DIR/psql-layer.zip"
+echo "Layer size: $(du -h "$OUTPUT_DIR/psql-layer.zip" | cut -f1)"
+rm -rf "$BUILD_DIR"
+```
 
 ### ffmpeg Layer
 
@@ -1334,7 +1661,7 @@ These packages are needed in the development environment (devcontainer) but are 
 
 ```bash
 pip install pytest pytest-cov moto mypy ruff \
-    "boto3-stubs[bedrock-runtime,s3,secretsmanager]" \
+    "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]" \
     aws-lambda-powertools
 ```
 
@@ -1399,6 +1726,35 @@ Key points:
 - `@logger.inject_lambda_context(clear_state=True)` — automatically adds Lambda context fields and clears custom keys between warm invocations to prevent state leakage.
 - `set_correlation_id()` — sets the Step Functions execution ARN as the correlation ID on every log line. This is the primary field for tracing a full pipeline run across all 7 Lambdas.
 - `append_keys()` — adds pipeline-specific context (e.g., `script_attempt`) that persists across all log lines in the invocation.
+
+### Discovery Handler — Additional Patterns
+
+The Discovery handler has patterns beyond the basic template:
+
+**Credential caching:** SSM (`/zerostars/db-connection-string`) and Secrets Manager (`zerostars/exa-api-key`) values are fetched once per cold start and cached in module-level globals. This avoids repeated API calls on warm invocations:
+
+```python
+_db_connection_string: str | None = None
+
+def _get_db_connection_string() -> str:
+    global _db_connection_string
+    if _db_connection_string is None:
+        ssm = boto3.client("ssm")
+        response = ssm.get_parameter(Name="/zerostars/db-connection-string", WithDecryption=True)
+        _db_connection_string = response["Parameter"]["Value"]
+    return _db_connection_string
+```
+
+**Prompt loading:** The system prompt is read from `prompts/discovery.md` using `LAMBDA_TASK_ROOT` (set automatically by the Lambda runtime, falls back to `__file__` parent for local testing).
+
+**Output parsing:** The handler must parse the agent's final text response as JSON. Because Claude models sometimes wrap JSON in markdown fences (~20% of the time despite prompt instructions), the parser strips `` ``` `` fences before `json.loads()`. It then validates:
+- All 9 required fields are present
+- `star_count` is an integer under 10
+- `repo_url` starts with `https://github.com/`
+
+If validation fails, the handler raises `ValueError`, causing the Lambda to fail. Step Functions retries handle transient agent output issues.
+
+**HTTP calls:** The handler uses `urllib.request` from stdlib for both Exa and GitHub API calls — no extra pip dependencies. Each call has a timeout (30s for Exa, 15s for GitHub) to prevent consuming the Lambda's 300s budget.
 
 ### Log Level Conventions
 
@@ -1649,11 +2005,145 @@ def lambda_handler(event: dict[str, object], context: LambdaContext) -> dict[str
     ...
 ```
 
+### `invoke_with_tools` Strict Type Annotations
+
+The `invoke_with_tools` signature shown in §5 uses `list[dict]` and `Callable[[str, dict], str]` for brevity. Under mypy strict, the actual implementation in `shared/bedrock.py` must use these precise types:
+
+```python
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+# The Bedrock Messages API tool definition schema. Each tool is a dict
+# with "name", "description", and "input_schema" keys. We use
+# dict[str, Any] because the input_schema sub-object has recursive
+# JSON Schema structure that cannot be expressed as a TypedDict without
+# losing practical usability.
+ToolDefinition = dict[str, Any]  # type alias
+
+# The tool_executor callback receives (tool_name, tool_input) and must
+# return a JSON-encoded string. tool_input is dict[str, Any] because
+# the shape depends on the tool's input_schema.
+ToolExecutor = Callable[[str, dict[str, Any]], str]
+
+DEFAULT_MODEL_ID: str = "us.anthropic.claude-sonnet-4-6"
+
+
+def invoke_model(
+    user_message: str,
+    system_prompt: str,
+    model_id: str = DEFAULT_MODEL_ID,
+    max_tokens: int = MAX_TOKENS,
+) -> str: ...
+
+
+def invoke_with_tools(
+    user_message: str,
+    system_prompt: str,
+    tools: list[ToolDefinition],
+    tool_executor: ToolExecutor,
+    model_id: str = DEFAULT_MODEL_ID,
+    max_tokens: int = MAX_TOKENS,
+    max_turns: int = 25,
+) -> str: ...
+```
+
+The `ToolDefinition` and `ToolExecutor` type aliases are module-level exports so handler code can import them for annotation:
+
+```python
+from shared.bedrock import invoke_with_tools, ToolDefinition, ToolExecutor
+```
+
+### Discovery Handler Internal Function Signatures
+
+The Discovery handler (`lambdas/discovery/handler.py`) contains private helper functions that must all have full type annotations for mypy strict. The exact signatures:
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from typing import Any
+
+import boto3
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.bedrock import ToolDefinition, ToolExecutor, invoke_with_tools
+from shared.logging import get_logger
+from shared.types import DiscoveryOutput, PipelineState
+
+logger = get_logger("discovery")
+
+# --- Module-level cached credentials ---
+_db_connection_string: str | None = None
+_exa_api_key: str | None = None
+
+# --- Tool definitions (module-level constant) ---
+TOOL_DEFINITIONS: list[ToolDefinition] = [...]  # populated per §5
+
+
+def _get_db_connection_string() -> str:
+    """Fetch DB connection string from SSM, cached across warm starts."""
+    ...
+
+
+def _get_exa_api_key() -> str:
+    """Fetch Exa API key from Secrets Manager, cached across warm starts."""
+    ...
+
+
+def _load_system_prompt() -> str:
+    """Read prompts/discovery.md from disk. Uses LAMBDA_TASK_ROOT."""
+    ...
+
+
+def _execute_exa_search(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call Exa API. Maps snake_case keys to camelCase. Returns parsed JSON."""
+    ...
+
+
+def _execute_query_postgres(tool_input: dict[str, Any]) -> dict[str, str]:
+    """Run read-only SQL via psql subprocess. Returns {"rows": ...} or {"error": ...}."""
+    ...
+
+
+def _execute_get_github_repo(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call GitHub REST API. Returns curated field subset."""
+    ...
+
+
+def _execute_tool(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Dispatch to the correct tool function, return JSON string."""
+    ...
+
+
+def _parse_discovery_output(text: str) -> DiscoveryOutput:
+    """Parse agent text response to DiscoveryOutput. Strips markdown fences, validates."""
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- `_execute_exa_search` returns `dict[str, Any]` because the Exa response contains nested lists of result objects with mixed-type values.
+- `_execute_query_postgres` returns `dict[str, str]` — always either `{"rows": "<stdout>"}` or `{"error": "<stderr>"}`. The narrower return type (vs `dict[str, Any]`) is intentional and passes strict checks.
+- `_execute_get_github_repo` returns `dict[str, Any]` because the curated GitHub response includes `str`, `int`, `list[str]`, and `None` values.
+- `_execute_tool` calls `json.dumps()` on the return value of the tool functions, so its return type is `str`.
+- `_parse_discovery_output` returns `DiscoveryOutput` (a TypedDict), which provides compile-time field validation at every call site.
+- The module-level globals `_db_connection_string` and `_exa_api_key` are typed as `str | None` and narrowed inside their getter functions via the `global` + `if is None` pattern.
+- `TOOL_DEFINITIONS` is typed as `list[ToolDefinition]` (alias for `list[dict[str, Any]]`).
+
 ### Typing Conventions
 
 - Every function in shared modules (`bedrock.py`, `db.py`, `s3.py`, `logging.py`) must have full type annotations — parameters and return types.
 - No bare `Any` without an explicit `# type: ignore[...]` comment explaining why.
-- `boto3-stubs` (already in devcontainer) provides typed clients: `mypy_boto3_bedrock_runtime`, `mypy_boto3_s3`, `mypy_boto3_secretsmanager`.
+- `boto3-stubs` (already in devcontainer) provides typed clients: `mypy_boto3_bedrock_runtime`, `mypy_boto3_s3`, `mypy_boto3_secretsmanager`, `mypy_boto3_ssm`. The `ssm` extra is needed for the Discovery handler's SSM `GetParameter` call.
 - Use `from __future__ import annotations` at the top of every file for PEP 604 union syntax (`X | Y`) and forward references.
 
 ---
@@ -1722,6 +2212,7 @@ PYTHONPATH=lambdas/shared/python pytest -v --cov=lambdas --cov-report=term-missi
 
 ```python
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1747,6 +2238,12 @@ def lambda_context() -> MagicMock:
 
 @pytest.fixture
 def mock_bedrock_client():
+    """Patches the Bedrock Runtime boto3 client used by shared/bedrock.py.
+
+    Used by handler tests that call invoke_model directly (Script, Producer,
+    Cover Art). Discovery and Research handlers should mock invoke_with_tools
+    instead — see mock_invoke_with_tools fixture.
+    """
     with patch("shared.bedrock.boto3.client") as mock:
         client = MagicMock()
         mock.return_value = client
@@ -1754,13 +2251,100 @@ def mock_bedrock_client():
 
 
 @pytest.fixture
+def mock_invoke_with_tools():
+    """Patches shared.bedrock.invoke_with_tools for Discovery handler tests.
+
+    Discovery and Research handlers call invoke_with_tools (not the raw
+    Bedrock client). This fixture patches invoke_with_tools at the handler's
+    import site so the handler's tool_executor callback is never called.
+
+    Usage:
+        def test_discovery(mock_invoke_with_tools, ...):
+            mock_invoke_with_tools.return_value = json.dumps({...})
+            result = lambda_handler(event, context)
+    """
+    with patch("lambdas.discovery.handler.invoke_with_tools") as mock:
+        yield mock
+
+
+@pytest.fixture
 def mock_db_connection():
+    """Patches psycopg2.connect in shared/db.py.
+
+    Used by handlers that access Postgres via the shared db module
+    (Post-Production, Site). NOT used by Discovery — Discovery
+    uses psql subprocess, not psycopg2. See mock_subprocess fixture.
+    """
     with patch("shared.db.psycopg2.connect") as mock:
         conn = MagicMock()
         cursor = MagicMock()
         conn.cursor.return_value = cursor
         mock.return_value = conn
         yield conn
+
+
+@pytest.fixture
+def mock_ssm():
+    """Patches boto3 SSM client for Discovery handler's _get_db_connection_string.
+
+    Returns a mock SSM client whose get_parameter returns a test connection string.
+    Also resets the module-level _db_connection_string cache to None.
+    """
+    with patch("lambdas.discovery.handler.boto3") as mock_boto3:
+        ssm_client = MagicMock()
+        ssm_client.get_parameter.return_value = {
+            "Parameter": {"Value": "postgresql://test:test@localhost:5432/zerostars?sslmode=require"}
+        }
+        mock_boto3.client.return_value = ssm_client
+        with patch("lambdas.discovery.handler._db_connection_string", None):
+            yield ssm_client
+
+
+@pytest.fixture
+def mock_secrets_manager():
+    """Patches boto3 Secrets Manager client for Discovery handler's _get_exa_api_key.
+
+    Returns a mock whose get_secret_value returns a test Exa API key.
+    Also resets the module-level _exa_api_key cache to None.
+    """
+    with patch("lambdas.discovery.handler.boto3") as mock_boto3:
+        sm_client = MagicMock()
+        sm_client.get_secret_value.return_value = {"SecretString": "test-exa-api-key-000"}
+        mock_boto3.client.return_value = sm_client
+        with patch("lambdas.discovery.handler._exa_api_key", None):
+            yield sm_client
+
+
+@pytest.fixture
+def mock_subprocess():
+    """Patches subprocess.run for Discovery handler's _execute_query_postgres.
+
+    Usage:
+        def test_psql_select(mock_subprocess):
+            mock_subprocess.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="row1\nrow2\n", stderr=""
+            )
+    """
+    with patch("lambdas.discovery.handler.subprocess.run") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_urlopen():
+    """Patches urllib.request.urlopen for Exa and GitHub API calls.
+
+    The mock's return value acts as a context manager (matching urlopen's real behavior).
+
+    Usage:
+        def test_github(mock_urlopen):
+            mock_response = MagicMock()
+            mock_response.read.return_value = json.dumps({...}).encode()
+            mock_response.__enter__ = lambda s: s
+            mock_response.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_response
+    """
+    with patch("lambdas.discovery.handler.urllib.request.urlopen") as mock:
+        yield mock
 
 
 @pytest.fixture
@@ -1818,67 +2402,353 @@ def sample_script_output() -> dict:
 
 | Dependency | Unit test approach | Integration test approach |
 |-----------|-------------------|-------------------------|
-| Bedrock | `unittest.mock` — patch `boto3.client("bedrock-runtime")` return values. moto does not support Bedrock. | Real Bedrock calls with dev AWS credentials. |
+| Bedrock (invoke_model) | `unittest.mock` — patch `boto3.client("bedrock-runtime")` return values. moto does not support Bedrock. | Real Bedrock calls with dev AWS credentials. |
+| Bedrock (invoke_with_tools) | `unittest.mock` — patch `invoke_with_tools` at the handler's import path (e.g., `lambdas.discovery.handler.invoke_with_tools`). | Real Bedrock calls (see E2E tests). |
 | S3 | `moto` `@mock_aws` decorator — creates in-memory S3. | Real S3 bucket in dev account with `test/` key prefix. |
-| Postgres | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
+| Postgres (shared/db.py) | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
+| Postgres (Discovery/psql) | `unittest.mock` — patch `subprocess.run` in `lambdas.discovery.handler`. | Real psql against dev RDS (see Discovery integration tests). |
+| SSM Parameter Store | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_parameter` return value. Reset module-level `_db_connection_string` cache. | Real SSM parameter `/zerostars/db-connection-string` in dev account. |
+| Secrets Manager (Exa key) | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_secret_value` return value. Reset module-level `_exa_api_key` cache. | Skip — uses real secret, tested transitively via E2E. |
 | Exa API | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per query. |
 | ElevenLabs | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per call. |
 | GitHub API | `unittest.mock` — patch `urllib.request.urlopen`. | Real public API (unauthenticated, 60 req/hour). |
 
 ### Unit Test Pattern
 
-Example for the Discovery handler:
+Tests for the Discovery handler (`tests/unit/test_discovery.py`). These demonstrate the test patterns for all Discovery-specific behaviors — output parsing, tool functions, the dispatcher, and the full handler. Other handlers follow the same structure with their own fixtures.
+
+#### Output Parsing Tests
 
 ```python
 import json
-from unittest.mock import MagicMock, patch
+import pytest
+
+from lambdas.discovery.handler import _parse_discovery_output
+
+VALID_OUTPUT = {
+    "repo_url": "https://github.com/someone/something",
+    "repo_name": "something",
+    "repo_description": "A cool project",
+    "developer_github": "someone",
+    "star_count": 3,
+    "language": "Go",
+    "discovery_rationale": "Interesting CLI tool.",
+    "key_files": ["main.go"],
+    "technical_highlights": ["Single-binary design"],
+}
 
 
-def test_discovery_returns_valid_output(pipeline_metadata, mock_bedrock_client, mock_db_connection, lambda_context):
-    """Discovery handler returns output matching DiscoveryOutput TypedDict."""
-    # Arrange: no previously featured developers
-    mock_db_connection.cursor.return_value.fetchall.return_value = []
+def test_parse_valid_json():
+    result = _parse_discovery_output(json.dumps(VALID_OUTPUT))
+    assert result["repo_url"] == "https://github.com/someone/something"
+    assert result["star_count"] == 3
 
-    # Arrange: mock Bedrock response with a valid discovery result
-    mock_bedrock_client.invoke_model.return_value = {
-        "body": MagicMock(read=MagicMock(return_value=json.dumps({
-            "content": [{"type": "text", "text": json.dumps({
-                "repo_url": "https://github.com/someone/something",
-                "repo_name": "something",
-                "repo_description": "A cool project",
-                "developer_github": "someone",
-                "star_count": 3,
-                "language": "Go",
-                "discovery_rationale": "Interesting CLI tool.",
-                "key_files": ["main.go"],
-                "technical_highlights": ["Single-binary design"],
-            })}],
-            "stop_reason": "end_turn",
-        }).encode()))
-    }
 
-    from lambdas.discovery.handler import lambda_handler
+def test_parse_fenced_json():
+    fenced = f"```json\n{json.dumps(VALID_OUTPUT)}\n```"
+    result = _parse_discovery_output(fenced)
+    assert result["repo_name"] == "something"
 
-    # Act
-    result = lambda_handler({"metadata": pipeline_metadata}, lambda_context)
 
-    # Assert: all required DiscoveryOutput keys present with correct types
-    assert isinstance(result["repo_url"], str)
-    assert result["repo_url"].startswith("https://github.com/")
+def test_parse_fenced_no_language_tag():
+    fenced = f"```\n{json.dumps(VALID_OUTPUT)}\n```"
+    result = _parse_discovery_output(fenced)
+    assert result["repo_name"] == "something"
+
+
+def test_parse_rejects_star_count_gte_10():
+    bad = {**VALID_OUTPUT, "star_count": 10}
+    with pytest.raises(ValueError, match="star_count"):
+        _parse_discovery_output(json.dumps(bad))
+
+
+def test_parse_coerces_string_star_count():
+    coerced = {**VALID_OUTPUT, "star_count": "3"}
+    result = _parse_discovery_output(json.dumps(coerced))
+    assert result["star_count"] == 3
     assert isinstance(result["star_count"], int)
-    assert isinstance(result["key_files"], list)
-    assert isinstance(result["technical_highlights"], list)
 
 
-def test_discovery_excludes_featured_developers(pipeline_metadata, mock_bedrock_client, mock_db_connection, lambda_context):
-    """Discovery handler passes featured developers list to Bedrock for exclusion."""
-    mock_db_connection.cursor.return_value.fetchall.return_value = [
-        ("previously-featured-dev",),
-    ]
-    # ... assert the system prompt or tool context includes the exclusion list
+def test_parse_rejects_missing_field():
+    incomplete = {k: v for k, v in VALID_OUTPUT.items() if k != "repo_url"}
+    with pytest.raises(ValueError, match="repo_url"):
+        _parse_discovery_output(json.dumps(incomplete))
+
+
+def test_parse_rejects_invalid_repo_url():
+    bad = {**VALID_OUTPUT, "repo_url": "https://gitlab.com/someone/something"}
+    with pytest.raises(ValueError, match="repo_url"):
+        _parse_discovery_output(json.dumps(bad))
+
+
+def test_parse_rejects_invalid_json():
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        _parse_discovery_output("this is not json at all")
+```
+
+#### psql Tool Tests
+
+```python
+import subprocess
+
+def test_psql_select_allowed(mock_subprocess, mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    mock_subprocess.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="user1\nuser2\n", stderr=""
+    )
+    result = _execute_query_postgres({"sql": "SELECT developer_github FROM featured_developers;"})
+    assert "rows" in result
+    assert "user1" in result["rows"]
+
+
+def test_psql_rejects_insert(mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    result = _execute_query_postgres({"sql": "INSERT INTO episodes VALUES (1, 'x');"})
+    assert "error" in result
+
+
+def test_psql_rejects_delete(mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    result = _execute_query_postgres({"sql": "DELETE FROM episodes;"})
+    assert "error" in result
+
+
+def test_psql_rejects_drop(mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    result = _execute_query_postgres({"sql": "DROP TABLE episodes;"})
+    assert "error" in result
+
+
+def test_psql_rejects_update(mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    result = _execute_query_postgres({"sql": "UPDATE episodes SET repo_name = 'x';"})
+    assert "error" in result
+
+
+def test_psql_leading_whitespace_select(mock_subprocess, mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    mock_subprocess.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="ok\n", stderr=""
+    )
+    result = _execute_query_postgres({"sql": "   SELECT 1;"})
+    assert "rows" in result
+
+
+def test_psql_error_returns_stderr(mock_subprocess, mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    mock_subprocess.return_value = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr="ERROR: relation does not exist"
+    )
+    result = _execute_query_postgres({"sql": "SELECT * FROM nonexistent;"})
+    assert "error" in result
+    assert "relation" in result["error"]
+
+
+def test_psql_timeout_returns_error(mock_subprocess, mock_ssm):
+    from lambdas.discovery.handler import _execute_query_postgres
+    mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd="psql", timeout=15)
+    result = _execute_query_postgres({"sql": "SELECT pg_sleep(999);"})
+    assert "error" in result
+```
+
+#### GitHub and Exa Tool Tests
+
+```python
+import json
+from unittest.mock import MagicMock
+from urllib.error import HTTPError
+
+
+def test_github_returns_curated_fields(mock_urlopen):
+    from lambdas.discovery.handler import _execute_get_github_repo
+    github_response = {
+        "name": "testrepo", "full_name": "testuser/testrepo",
+        "description": "A test repo", "stargazers_count": 5,
+        "forks_count": 1, "language": "Python", "topics": ["cli"],
+        "created_at": "2024-01-01T00:00:00Z", "pushed_at": "2024-12-01T00:00:00Z",
+        "open_issues_count": 0, "license": {"spdx_id": "MIT"},
+        "owner": {"type": "User"}, "html_url": "https://github.com/testuser/testrepo",
+        "default_branch": "main",
+        "id": 123456, "node_id": "R_abc123", "size": 1024,  # should be filtered out
+    }
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(github_response).encode()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+    mock_urlopen.return_value = mock_response
+
+    result = _execute_get_github_repo({"owner": "testuser", "repo": "testrepo"})
+    assert result["stargazers_count"] == 5
+    assert result["license"] == "MIT"
+    assert "id" not in result
+
+
+def test_github_null_license(mock_urlopen):
+    from lambdas.discovery.handler import _execute_get_github_repo
+    github_response = {
+        "name": "proj", "full_name": "u/proj", "description": None,
+        "stargazers_count": 0, "forks_count": 0, "language": None,
+        "topics": [], "created_at": "2024-01-01T00:00:00Z",
+        "pushed_at": "2024-01-01T00:00:00Z", "open_issues_count": 0,
+        "license": None, "owner": {"type": "User"},
+        "html_url": "https://github.com/u/proj", "default_branch": "main",
+    }
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps(github_response).encode()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+    mock_urlopen.return_value = mock_response
+
+    result = _execute_get_github_repo({"owner": "u", "repo": "proj"})
+    assert result["license"] is None
+
+
+def test_github_http_error(mock_urlopen):
+    from lambdas.discovery.handler import _execute_get_github_repo
+    mock_urlopen.side_effect = HTTPError(
+        url="https://api.github.com/repos/x/y",
+        code=404, msg="Not Found", hdrs=None, fp=None,  # type: ignore[arg-type]
+    )
+    result = _execute_get_github_repo({"owner": "x", "repo": "y"})
+    assert "error" in result
+
+
+def test_exa_snake_to_camel_mapping(mock_urlopen, mock_secrets_manager):
+    from lambdas.discovery.handler import _execute_exa_search
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps({"results": []}).encode()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+    mock_urlopen.return_value = mock_response
+
+    _execute_exa_search({
+        "query": "python cli tool",
+        "include_domains": ["github.com"],
+        "num_results": 5,
+        "start_published_date": "2024-01-01",
+    })
+    request_obj = mock_urlopen.call_args[0][0]
+    sent_body = json.loads(request_obj.data)
+    assert "includeDomains" in sent_body
+    assert "numResults" in sent_body
+    assert "startPublishedDate" in sent_body
+    assert "include_domains" not in sent_body
+
+
+def test_exa_http_error(mock_urlopen, mock_secrets_manager):
+    from lambdas.discovery.handler import _execute_exa_search
+    mock_urlopen.side_effect = HTTPError(
+        url="https://api.exa.ai/search",
+        code=429, msg="Too Many Requests", hdrs=None, fp=None,  # type: ignore[arg-type]
+    )
+    result = _execute_exa_search({"query": "test"})
+    assert "error" in result
+```
+
+#### Tool Dispatcher Tests
+
+```python
+import json
+from unittest.mock import patch
+
+
+def test_tool_dispatcher_routes_exa():
+    from lambdas.discovery.handler import _execute_tool
+    with patch("lambdas.discovery.handler._execute_exa_search", return_value={"results": []}) as mock:
+        result_str = _execute_tool("exa_search", {"query": "test"})
+        mock.assert_called_once_with({"query": "test"})
+        assert json.loads(result_str) == {"results": []}
+
+
+def test_tool_dispatcher_routes_postgres():
+    from lambdas.discovery.handler import _execute_tool
+    with patch("lambdas.discovery.handler._execute_query_postgres", return_value={"rows": "ok"}) as mock:
+        result_str = _execute_tool("query_postgres", {"sql": "SELECT 1;"})
+        mock.assert_called_once()
+        assert json.loads(result_str) == {"rows": "ok"}
+
+
+def test_tool_dispatcher_routes_github():
+    from lambdas.discovery.handler import _execute_tool
+    with patch("lambdas.discovery.handler._execute_get_github_repo", return_value={"name": "r"}) as mock:
+        result_str = _execute_tool("get_github_repo", {"owner": "u", "repo": "r"})
+        mock.assert_called_once()
+
+
+def test_tool_dispatcher_unknown_tool():
+    from lambdas.discovery.handler import _execute_tool
+    result = json.loads(_execute_tool("nonexistent_tool", {}))
+    assert "error" in result
+    assert "nonexistent_tool" in result["error"]
+```
+
+#### Full Handler Tests
+
+```python
+import json
+from unittest.mock import patch
+
+VALID_HANDLER_OUTPUT = json.dumps({
+    "repo_url": "https://github.com/someone/something",
+    "repo_name": "something",
+    "repo_description": "A cool project",
+    "developer_github": "someone",
+    "star_count": 3,
+    "language": "Go",
+    "discovery_rationale": "Interesting CLI tool.",
+    "key_files": ["main.go"],
+    "technical_highlights": ["Single-binary design"],
+})
+
+
+def test_handler_returns_valid_output(pipeline_metadata, lambda_context, mock_invoke_with_tools):
+    mock_invoke_with_tools.return_value = VALID_HANDLER_OUTPUT
+    with patch("lambdas.discovery.handler._load_system_prompt", return_value="sp"):
+        from lambdas.discovery.handler import lambda_handler
+        result = lambda_handler({"metadata": pipeline_metadata}, lambda_context)
+    assert result["repo_url"] == "https://github.com/someone/something"
+    assert isinstance(result["star_count"], int)
+    assert result["star_count"] < 10
+
+
+def test_handler_passes_tools_and_executor(pipeline_metadata, lambda_context, mock_invoke_with_tools):
+    mock_invoke_with_tools.return_value = VALID_HANDLER_OUTPUT
+    with patch("lambdas.discovery.handler._load_system_prompt", return_value="sp"):
+        from lambdas.discovery.handler import lambda_handler
+        lambda_handler({"metadata": pipeline_metadata}, lambda_context)
+    call_kwargs = mock_invoke_with_tools.call_args
+    tools = call_kwargs.kwargs.get("tools", call_kwargs[1].get("tools"))
+    assert len(tools) == 3
+    tool_names = {t["name"] for t in tools}
+    assert tool_names == {"exa_search", "query_postgres", "get_github_repo"}
+    executor = call_kwargs.kwargs.get("tool_executor", call_kwargs[1].get("tool_executor"))
+    assert callable(executor)
+
+
+def test_handler_rejects_high_star_count(pipeline_metadata, lambda_context, mock_invoke_with_tools):
+    bad = json.loads(VALID_HANDLER_OUTPUT)
+    bad["star_count"] = 15
+    mock_invoke_with_tools.return_value = json.dumps(bad)
+    with patch("lambdas.discovery.handler._load_system_prompt", return_value="sp"):
+        from lambdas.discovery.handler import lambda_handler
+        import pytest
+        with pytest.raises(ValueError, match="star_count"):
+            lambda_handler({"metadata": pipeline_metadata}, lambda_context)
+
+
+def test_handler_handles_fenced_output(pipeline_metadata, lambda_context, mock_invoke_with_tools):
+    mock_invoke_with_tools.return_value = f"```json\n{VALID_HANDLER_OUTPUT}\n```"
+    with patch("lambdas.discovery.handler._load_system_prompt", return_value="sp"):
+        from lambdas.discovery.handler import lambda_handler
+        result = lambda_handler({"metadata": pipeline_metadata}, lambda_context)
+    assert result["repo_name"] == "something"
 ```
 
 ### Integration Test Pattern
+
+Integration tests hit real AWS services and external APIs. They are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
+
+#### Generic Bedrock Integration Test (`tests/integration/test_bedrock_live.py`)
 
 ```python
 import pytest
@@ -1890,15 +2760,178 @@ def test_bedrock_invoke_model():
     from shared.bedrock import invoke_model
 
     result = invoke_model(
-        prompt="Respond with exactly: PING",
+        user_message="Respond with exactly: PING",
         system_prompt="You are a test helper. Respond with exactly what is asked.",
     )
     assert "PING" in result
 ```
 
-Integration tests are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
+#### Discovery Integration Tests (`tests/integration/test_discovery_live.py`)
+
+These verify that Discovery's external dependencies are reachable and return expected data shapes.
+
+```python
+import json
+import subprocess
+
+import boto3
+import pytest
+
+
+@pytest.mark.integration
+def test_psql_connects_to_zerostars_db():
+    """psql can connect to the real zerostars database and query featured_developers."""
+    ssm = boto3.client("ssm")
+    response = ssm.get_parameter(Name="/zerostars/db-connection-string", WithDecryption=True)
+    conn_str = response["Parameter"]["Value"]
+
+    result = subprocess.run(
+        ["psql", conn_str, "-c", "SELECT developer_github FROM featured_developers LIMIT 5;",
+         "--no-align", "--tuples-only"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0
+    assert "ERROR" not in result.stderr
+
+
+@pytest.mark.integration
+def test_ssm_parameter_exists():
+    """SSM parameter /zerostars/db-connection-string exists and is a SecureString."""
+    ssm = boto3.client("ssm")
+    response = ssm.get_parameter(Name="/zerostars/db-connection-string", WithDecryption=True)
+    value = response["Parameter"]["Value"]
+    assert value.startswith("postgresql://")
+
+
+@pytest.mark.integration
+def test_github_api_returns_expected_fields():
+    """GitHub public API returns expected repo metadata fields for a known repo."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        "https://api.github.com/repos/python/cpython",
+        headers={
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "zerostars-integration-test",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+
+    for field in ["name", "full_name", "description", "stargazers_count",
+                  "forks_count", "language", "topics", "created_at",
+                  "pushed_at", "open_issues_count", "license", "owner",
+                  "html_url", "default_branch"]:
+        assert field in data, f"Expected field '{field}' missing from GitHub API response"
+
+
+@pytest.mark.integration
+@pytest.mark.skip(reason="Exa API costs money per query. Run manually when needed.")
+def test_exa_search_returns_results():
+    """Exa search API returns results for a GitHub-scoped query."""
+    sm = boto3.client("secretsmanager")
+    secret = sm.get_secret_value(SecretId="zerostars/exa-api-key")
+    api_key = secret["SecretString"]
+
+    import urllib.request
+
+    body = json.dumps({
+        "query": "python cli tool hobbyist project",
+        "includeDomains": ["github.com"],
+        "numResults": 3,
+        "contents": {"text": True},
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.exa.ai/search",
+        data=body,
+        headers={"Content-Type": "application/json", "x-api-key": api_key},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    assert "results" in data
+    assert len(data["results"]) > 0
+```
 
 **Resource isolation:** Integration tests must use unique prefixes for S3 keys and DB test data (e.g., the GitHub Actions run ID or commit SHA) to prevent conflicts when multiple CI runs execute in parallel. Clean up test resources in a `finally` block or pytest `teardown` fixture.
+
+### End-to-End Tests
+
+End-to-end tests invoke a full Lambda handler locally with real external dependencies (real Bedrock, real API keys, real database). They verify that the entire handler path works — from input event through tool use to parsed output. E2E tests are expensive (Bedrock + Exa API calls) and slow (30-90 seconds per run), so they are run manually, not in CI.
+
+E2E tests live in `tests/integration/` alongside other integration tests and use the same `@pytest.mark.integration` marker.
+
+#### Discovery E2E Test (`tests/integration/test_discovery_e2e.py`)
+
+```python
+import json
+import os
+
+import boto3
+import pytest
+
+
+@pytest.mark.integration
+@pytest.mark.skip(reason="E2E: costs money (Bedrock + Exa). Run manually: pytest tests/integration/test_discovery_e2e.py -v -m integration --override-ini='addopts=' -k e2e")
+def test_discovery_e2e_produces_valid_output():
+    """Invoke Discovery handler with real Bedrock, psql, Exa, and GitHub API.
+
+    Verifies:
+    1. Output is valid DiscoveryOutput with all 9 required fields
+    2. star_count < 10
+    3. repo_url starts with https://github.com/
+    4. Selected developer is not in featured_developers table
+    """
+    import subprocess
+    from unittest.mock import MagicMock
+
+    # Set LAMBDA_TASK_ROOT so the handler can find prompts/discovery.md
+    os.environ.setdefault(
+        "LAMBDA_TASK_ROOT",
+        os.path.join(os.path.dirname(__file__), "..", "..", "lambdas", "discovery"),
+    )
+
+    from lambdas.discovery.handler import lambda_handler
+
+    event = {
+        "metadata": {
+            "execution_id": "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:e2e-test",
+            "script_attempt": 1,
+        }
+    }
+    context = MagicMock()
+    context.function_name = "e2e-test-discovery"
+
+    result = lambda_handler(event, context)
+
+    # Validate output shape
+    required_fields = [
+        "repo_url", "repo_name", "repo_description", "developer_github",
+        "star_count", "language", "discovery_rationale", "key_files",
+        "technical_highlights",
+    ]
+    for field in required_fields:
+        assert field in result, f"Missing required field: {field}"
+
+    # Validate constraints
+    assert isinstance(result["star_count"], int)
+    assert result["star_count"] < 10, f"star_count {result['star_count']} >= 10"
+    assert result["repo_url"].startswith("https://github.com/")
+
+    # Verify developer is not already featured
+    ssm = boto3.client("ssm")
+    conn_str = ssm.get_parameter(
+        Name="/zerostars/db-connection-string", WithDecryption=True
+    )["Parameter"]["Value"]
+    check = subprocess.run(
+        ["psql", conn_str, "-c",
+         f"SELECT developer_github FROM featured_developers WHERE developer_github = '{result['developer_github']}';",
+         "--no-align", "--tuples-only"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert check.stdout.strip() == "", (
+        f"Developer {result['developer_github']} is already in featured_developers"
+    )
+```
 
 ### Per-Handler Test Requirements
 
@@ -1906,7 +2939,7 @@ Each handler's unit test file must verify:
 
 | Handler | Required test cases |
 |---------|-------------------|
-| Discovery | Output matches `DiscoveryOutput` shape; excludes previously featured developers; handles empty search results |
+| Discovery | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); star_count >= 10 rejected; string star_count coerced to int; missing required field rejected; invalid repo_url rejected; invalid JSON rejected. **psql tool:** SELECT allowed; INSERT/DELETE/DROP/UPDATE each rejected; leading whitespace SELECT allowed; psql stderr returns error dict; subprocess timeout returns error dict. **GitHub tool:** curated fields returned (no extra fields); null license handled; HTTP error returns error dict. **Exa tool:** snake_case inputs mapped to camelCase in request body; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each tool name; unknown tool returns error dict. **Full handler:** returns valid DiscoveryOutput; passes 3 tools and executor to invoke_with_tools; rejects high star_count from agent; handles fenced output from agent. |
 | Research | Output matches `ResearchOutput` shape; handles missing GitHub bio; handles user with zero repos |
 | Script | Output matches `ScriptOutput` shape; `character_count` under 5,000; all 6 segments in `segments` list; incorporates producer feedback on retry (`script_attempt > 1`) |
 | Producer | Returns `verdict: "PASS"` or `"FAIL"` with correct fields; FAIL includes `feedback` and `issues`; character count over 5,000 triggers FAIL |
@@ -1914,7 +2947,7 @@ Each handler's unit test file must verify:
 | TTS | Output matches `TTSOutput` shape; correctly parses `**Hype:**`, `**Roast:**`, `**Phil:**` labels; raises exception on malformed script lines |
 | Post-Production | Output matches `PostProductionOutput` shape; writes to `episodes` table; writes to `featured_developers` table |
 | Site | Returns valid HTML with status 200; handles empty episodes table |
-| Shared: bedrock | `invoke_model` returns parsed text; `invoke_with_tools` handles tool-use loop; retries on throttling |
+| Shared: bedrock | **invoke_model:** returns parsed text from Bedrock response; passes correct body structure (`anthropic_version`, `max_tokens`, `system`, `messages`). **invoke_with_tools:** single turn with no tool use (`end_turn`) returns text; tool use loop (`tool_use` then `end_turn`) calls tool_executor and returns final text; multiple tool_use blocks in one turn calls tool_executor for each; max_turns exceeded raises RuntimeError; appends correct message structure (assistant with tool_use content, then user with tool_result). **Retry:** retries on ThrottlingException with backoff; raises after max retries exhausted. |
 | Shared: db | `query` returns rows; `execute` returns rowcount; connection uses `sslmode=require` |
 | Shared: s3 | `upload_bytes` calls S3 `put_object`; `generate_presigned_url` returns valid URL |
 
@@ -1951,7 +2984,7 @@ jobs:
           pip install --upgrade pip
           pip install ruff mypy pytest pytest-cov "moto[s3]" boto3 \
             psycopg2-binary jinja2 aws-lambda-powertools \
-            "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]"
 
       - uses: hashicorp/setup-terraform@v3
 
@@ -2002,7 +3035,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install pytest boto3 psycopg2-binary aws-lambda-powertools \
-            "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]"
 
       - name: Integration tests
         run: pytest tests/integration/ -v -m integration
@@ -2050,6 +3083,8 @@ Rule sets: `E` (pycodestyle errors), `F` (pyflakes), `I` (isort import ordering)
 | Bedrock Nova Canvas model ID | `amazon.nova-canvas-v1:0` |
 | ElevenLabs model | `eleven_v3` |
 | ElevenLabs output format | `mp3_44100_128` |
+| Discovery star threshold | Under 10 (hard ceiling, verified via GitHub API) |
+| SSM DB connection string path | `/zerostars/db-connection-string` (SecureString, already provisioned) |
 | Script character limit | 5,000 (target 4,000–4,500) |
 | Max script retry attempts | 3 |
 | Tags | `project = "0-stars-podcast"`, `managed_by = "terraform"` |
