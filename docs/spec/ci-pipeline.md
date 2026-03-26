@@ -1,0 +1,110 @@
+> Part of the [Implementation Spec](../../IMPLEMENTATION_SPEC.md)
+
+# CI Pipeline
+
+GitHub Actions runs linting, type checking, and unit tests on every push and pull request.
+
+### Workflow File
+
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ruff mypy pytest pytest-cov "moto[s3]" boto3 \
+            psycopg2-binary jinja2 aws-lambda-powertools \
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]"
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform validate
+        run: |
+          cd terraform
+          terraform init -backend=false
+          terraform validate
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: mypy type check
+        run: mypy lambdas/
+        env:
+          PYTHONPATH: lambdas/shared/python
+
+      - name: Unit tests
+        run: pytest tests/unit/ -v --tb=short --cov=lambdas --cov-report=term-missing
+        env:
+          PYTHONPATH: lambdas/shared/python
+
+  integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest boto3 psycopg2-binary aws-lambda-powertools \
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]"
+
+      - name: Integration tests
+        run: pytest tests/integration/ -v -m integration
+        env:
+          PYTHONPATH: lambdas/shared/python
+          DB_CONNECTION_STRING: ${{ secrets.DEV_DB_CONNECTION_STRING }}
+```
+
+### Ruff Configuration
+
+In `pyproject.toml`:
+
+```toml
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+```
+
+Rule sets: `E` (pycodestyle errors), `F` (pyflakes), `I` (isort import ordering), `N` (pep8-naming), `W` (pycodestyle warnings), `UP` (pyupgrade — modernize syntax for Python 3.12).

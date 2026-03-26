@@ -6,7 +6,7 @@ Project context and conventions for AI assistants working on this codebase.
 
 "0 Stars, 10/10" is a closed-loop multi-agent podcast pipeline. AI agents run weekly on AWS to find underrated GitHub projects, write comedy podcast scripts, generate cover art, produce audio, and publish episodes — fully autonomous, no human in the loop. AWS serverless (Step Functions, Lambda, Bedrock, RDS), Terraformed. Portfolio project demonstrating production agentic AI engineering.
 
-**Full build blueprint:** See `IMPLEMENTATION_SPEC.md` for architecture decisions, database schema, Terraform conventions, Lambda patterns, API contracts, and the Step Functions ASL definition.
+**Full build blueprint:** See `IMPLEMENTATION_SPEC.md` (index) and `docs/spec/` for architecture decisions, database schema, Terraform conventions, Lambda patterns, API contracts, and the Step Functions ASL definition.
 
 ## Repo Layout
 
