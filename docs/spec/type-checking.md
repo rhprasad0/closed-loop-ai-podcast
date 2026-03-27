@@ -348,6 +348,91 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> ScriptOutput
 - `SPEAKER_PATTERN` is typed as `re.Pattern[str]` (compiled regex). It is used for warning-level validation of script line format — lines that do not match are logged but do not cause a `ValueError`. Hard rejection of malformed lines belongs in the TTS Lambda.
 - `REQUIRED_SEGMENTS` is typed as `list[str]`. The parser checks `data["segments"] == REQUIRED_SEGMENTS` (exact match, order matters).
 
+### Producer Handler Internal Function Signatures
+
+The Producer handler (`lambdas/producer/handler.py`) follows the same pattern as the Script handler — it uses `invoke_model` (single prompt-response) rather than `invoke_with_tools`. The key difference is that the Producer also queries Postgres via the shared `db` module to fetch benchmark scripts from top-performing past episodes.
+
+```python
+from __future__ import annotations
+
+import json
+import os
+
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.bedrock import invoke_model
+from shared.db import query
+from shared.logging import get_logger
+from shared.types import PipelineState, ProducerOutput
+
+logger = get_logger("producer")
+
+# --- Module-level constants ---
+MAX_SCRIPT_CHARACTERS: int = 5000
+
+BENCHMARK_QUERY: str = """
+    SELECT e.script_text
+    FROM episodes e
+    JOIN episode_metrics em ON e.episode_id = em.episode_id
+    ORDER BY (em.views + em.likes * 2 + em.comments * 3 + em.shares * 5) DESC
+    LIMIT 3
+"""
+
+
+def _load_system_prompt() -> str:
+    """Read prompts/producer.md from disk. Uses LAMBDA_TASK_ROOT."""
+    ...
+
+
+def _fetch_benchmark_scripts() -> list[str]:
+    """Fetch top-performing episode scripts from Postgres for quality calibration.
+
+    Returns a list of 0-3 script_text strings, ordered by engagement score.
+    Returns an empty list if no episodes exist yet or if the DB query fails.
+    """
+    ...
+
+
+def _build_user_message(event: PipelineState, benchmarks: list[str]) -> str:
+    """Assemble script + discovery + research + benchmarks into a user message.
+
+    Extracts $.script.text, $.script.character_count, $.script.segments,
+    $.discovery.repo_name, $.discovery.repo_description,
+    $.research.hiring_signals from the pipeline state. Appends benchmark
+    scripts (if any) in a clearly labeled section. Returns a structured
+    plain-text message with clear section headers.
+    """
+    ...
+
+
+def _parse_producer_output(text: str) -> ProducerOutput:
+    """Parse agent text response to ProducerOutput. Strips markdown fences, validates.
+
+    Validates:
+    - verdict is exactly "PASS" or "FAIL"
+    - score is an integer 1-10 (coerces string to int)
+    - FAIL verdicts must include feedback (str) and issues (list[str])
+    - PASS verdicts may include notes (str)
+    Raises ValueError if validation fails.
+    """
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> ProducerOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- No `boto3` import — Producer does not fetch secrets from SSM or Secrets Manager. It accesses Postgres via the shared `db.query` function (which reads `DB_CONNECTION_STRING` from the environment) and calls Bedrock via `invoke_model` (which manages the boto3 client internally).
+- No `ToolDefinition`, `ToolExecutor`, or `_execute_tool` — Producer has no Bedrock tools. It sends a single prompt and receives a single response, identical to Script's pattern.
+- `_fetch_benchmark_scripts` returns `list[str]` — a list of raw `script_text` values from the database. Returns an empty list when no episodes exist (early pipeline runs) or if the query fails. The function wraps the `shared.db.query` call and handles exceptions internally rather than propagating them (benchmark absence should not crash the evaluation).
+- `_build_user_message` takes both `PipelineState` and `benchmarks: list[str]` because the benchmarks come from a separate DB query, not from the pipeline state. The function reads `event["script"]`, `event["discovery"]`, and `event["research"]`.
+- `_parse_producer_output` returns `ProducerOutput` (TypedDict with `NotRequired` fields). It validates `verdict` against the literal values `"PASS"` and `"FAIL"`, coerces `score` from string to int if needed, and enforces that FAIL verdicts contain both `feedback` and `issues` fields while PASS verdicts may optionally contain `notes`.
+- `BENCHMARK_QUERY` is typed as `str` (module-level constant). The engagement score formula weights metrics: views(1x) + likes(2x) + comments(3x) + shares(5x), reflecting the relative value of each engagement type.
+- No module-level credential caching is needed — the shared `db` module handles connection management, and `DB_CONNECTION_STRING` is an environment variable (not fetched from SSM at runtime like Discovery's connection string).
+
 ### Typing Conventions
 
 - Every function in shared modules (`bedrock.py`, `db.py`, `s3.py`, `logging.py`) must have full type annotations — parameters and return types.

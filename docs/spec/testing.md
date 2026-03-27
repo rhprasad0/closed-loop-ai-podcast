@@ -50,6 +50,7 @@ tests/
     ├── test_discovery_e2e.py
     ├── test_research_e2e.py
     ├── test_script_e2e.py
+    ├── test_producer_e2e.py
     └── test_mcp_e2e.py
 ```
 
@@ -366,6 +367,81 @@ def producer_feedback_for_retry() -> dict:
             "Roast's grudging compliment in segment 4 does not reference a specific technical decision",
         ],
     }
+
+
+@pytest.fixture
+def mock_producer_invoke_model():
+    """Patches shared.bedrock.invoke_model for Producer handler tests.
+
+    Producer handler calls invoke_model (not invoke_with_tools or the raw
+    Bedrock client). This fixture patches invoke_model at the handler's
+    import site so no Bedrock call is made.
+
+    Usage:
+        def test_producer(mock_producer_invoke_model, ...):
+            mock_producer_invoke_model.return_value = json.dumps({...})
+            result = lambda_handler(event, context)
+    """
+    with patch("lambdas.producer.handler.invoke_model") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_producer_db_query():
+    """Patches shared.db.query for Producer handler's benchmark script fetching.
+
+    The Producer handler calls shared.db.query to fetch top-performing episode
+    scripts from Postgres. This fixture patches query at the handler's import
+    site so no database call is made.
+
+    Usage:
+        def test_producer_with_benchmarks(mock_producer_db_query, ...):
+            mock_producer_db_query.return_value = [("script text here",)]
+            result = lambda_handler(event, context)
+    """
+    with patch("lambdas.producer.handler.query") as mock:
+        mock.return_value = []  # default: no benchmarks
+        yield mock
+
+
+@pytest.fixture
+def sample_producer_pass_output() -> dict:
+    return {
+        "verdict": "PASS",
+        "score": 8,
+        "notes": "Strong character voices, specific jokes about testrepo. Hiring segment references actual repos.",
+    }
+
+
+@pytest.fixture
+def sample_producer_fail_output() -> dict:
+    return {
+        "verdict": "FAIL",
+        "score": 4,
+        "feedback": (
+            "The hiring manager segment is too generic. Reference specific repos "
+            "and commit patterns from the research data. Also, Roast's grudging "
+            "compliment in segment 4 says 'it is not terrible' without referencing "
+            "a specific technical decision."
+        ),
+        "issues": [
+            "Hiring segment uses generic praise instead of specific observations",
+            "Roast's grudging compliment does not reference a specific technical decision",
+            "Two generic jokes could apply to any project (lines 3 and 7)",
+        ],
+    }
+
+
+@pytest.fixture
+def sample_benchmark_scripts() -> list[tuple[str]]:
+    """Benchmark scripts as returned by shared.db.query (list of row tuples)."""
+    return [
+        (
+            "**Hype:** Welcome back! Today we found pasta-sorter by noodlefan99!\n"
+            "**Roast:** Four stars. My sourdough starter has more followers.\n"
+            "**Phil:** But what is a sort, really? Are we not all just unsorted data?",
+        ),
+    ]
 ```
 
 ### Mocking Strategy
@@ -377,6 +453,7 @@ def producer_feedback_for_retry() -> dict:
 | S3 | `moto` `@mock_aws` decorator — creates in-memory S3. | Real S3 bucket in dev account with `test/` key prefix. |
 | Postgres (shared/db.py) | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
 | Postgres (Discovery/psql) | `unittest.mock` — patch `subprocess.run` in `lambdas.discovery.handler`. | Real psql against dev RDS (see Discovery integration tests). |
+| Postgres (Producer/shared.db) | `unittest.mock` — patch `shared.db.query` at `lambdas.producer.handler.query`. | Real dev RDS instance (see `test_producer_db_benchmark_query` integration test). |
 | SSM Parameter Store | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_parameter` return value. Reset module-level `_db_connection_string` cache. | Real SSM parameter `/zerostars/db-connection-string` in dev account. |
 | Secrets Manager (Exa key) | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_secret_value` return value. Reset module-level `_exa_api_key` cache. | Skip — uses real secret, tested transitively via E2E. |
 | Exa API | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per query. |
@@ -1626,6 +1703,425 @@ def test_handler_raises_on_bedrock_error(
             )
 ```
 
+### Producer Unit Tests
+
+Tests for the Producer handler (`tests/unit/test_producer.py`). The Producer handler follows the same pattern as the Script handler — it uses `invoke_model` (single prompt-response) instead of `invoke_with_tools`, so there are no tool function tests or dispatcher tests. The Producer also queries Postgres for benchmark scripts via `shared.db.query`. The test structure has three sections: output parsing, user message building, and full handler tests.
+
+#### Output Parsing Tests
+
+```python
+import json
+import pytest
+
+from lambdas.producer.handler import _parse_producer_output
+
+VALID_PASS_OUTPUT = {
+    "verdict": "PASS",
+    "score": 8,
+    "notes": "Strong character voices, specific jokes. Hiring segment references actual repos.",
+}
+
+VALID_FAIL_OUTPUT = {
+    "verdict": "FAIL",
+    "score": 4,
+    "feedback": (
+        "The hiring manager segment uses generic praise instead of specific observations. "
+        "Rewrite Roast's line in segment 5 to reference a specific repo by name."
+    ),
+    "issues": [
+        "Hiring segment uses generic praise instead of specific observations",
+        "Roast's grudging compliment does not reference a specific technical decision",
+    ],
+}
+
+
+def test_parse_valid_pass_json():
+    result = _parse_producer_output(json.dumps(VALID_PASS_OUTPUT))
+    assert result["verdict"] == "PASS"
+    assert result["score"] == 8
+    assert result["notes"] == VALID_PASS_OUTPUT["notes"]
+
+
+def test_parse_valid_fail_json():
+    result = _parse_producer_output(json.dumps(VALID_FAIL_OUTPUT))
+    assert result["verdict"] == "FAIL"
+    assert result["score"] == 4
+    assert "hiring" in result["feedback"].lower()
+    assert len(result["issues"]) == 2
+
+
+def test_parse_fenced_json():
+    fenced = f"```json\n{json.dumps(VALID_PASS_OUTPUT)}\n```"
+    result = _parse_producer_output(fenced)
+    assert result["verdict"] == "PASS"
+
+
+def test_parse_fenced_no_language_tag():
+    fenced = f"```\n{json.dumps(VALID_PASS_OUTPUT)}\n```"
+    result = _parse_producer_output(fenced)
+    assert result["verdict"] == "PASS"
+
+
+def test_parse_rejects_missing_verdict():
+    incomplete = {"score": 8, "notes": "Good script."}
+    with pytest.raises(ValueError, match="verdict"):
+        _parse_producer_output(json.dumps(incomplete))
+
+
+def test_parse_rejects_missing_score():
+    incomplete = {"verdict": "PASS", "notes": "Good script."}
+    with pytest.raises(ValueError, match="score"):
+        _parse_producer_output(json.dumps(incomplete))
+
+
+def test_parse_rejects_invalid_verdict_value():
+    bad = {**VALID_PASS_OUTPUT, "verdict": "MAYBE"}
+    with pytest.raises(ValueError, match="verdict"):
+        _parse_producer_output(json.dumps(bad))
+
+
+def test_parse_rejects_fail_missing_feedback():
+    bad = {"verdict": "FAIL", "score": 4, "issues": ["issue 1"]}
+    with pytest.raises(ValueError, match="feedback"):
+        _parse_producer_output(json.dumps(bad))
+
+
+def test_parse_rejects_fail_missing_issues():
+    bad = {"verdict": "FAIL", "score": 4, "feedback": "Fix the hiring segment."}
+    with pytest.raises(ValueError, match="issues"):
+        _parse_producer_output(json.dumps(bad))
+
+
+def test_parse_pass_with_notes_accepted():
+    result = _parse_producer_output(json.dumps(VALID_PASS_OUTPUT))
+    assert "notes" in result
+    assert isinstance(result["notes"], str)
+
+
+def test_parse_pass_without_notes_accepted():
+    minimal = {"verdict": "PASS", "score": 7}
+    result = _parse_producer_output(json.dumps(minimal))
+    assert result["verdict"] == "PASS"
+    assert result["score"] == 7
+
+
+def test_parse_coerces_string_score_to_int():
+    coerced = {**VALID_PASS_OUTPUT, "score": "8"}
+    result = _parse_producer_output(json.dumps(coerced))
+    assert result["score"] == 8
+    assert isinstance(result["score"], int)
+
+
+def test_parse_rejects_invalid_json():
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        _parse_producer_output("this is not json at all")
+```
+
+#### User Message Building Tests
+
+```python
+from lambdas.producer.handler import _build_user_message
+
+
+def test_build_user_message_includes_script_text(
+    pipeline_metadata, sample_discovery_output, sample_research_output, sample_script_output,
+):
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=[])
+    assert "Welcome to 0 Stars" in msg
+
+
+def test_build_user_message_includes_character_count(
+    pipeline_metadata, sample_discovery_output, sample_research_output, sample_script_output,
+):
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=[])
+    assert str(sample_script_output["character_count"]) in msg
+
+
+def test_build_user_message_includes_discovery_repo_name(
+    pipeline_metadata, sample_discovery_output, sample_research_output, sample_script_output,
+):
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=[])
+    assert "testrepo" in msg
+
+
+def test_build_user_message_includes_discovery_repo_description(
+    pipeline_metadata, sample_discovery_output, sample_research_output, sample_script_output,
+):
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=[])
+    assert "A test repository" in msg
+
+
+def test_build_user_message_includes_research_hiring_signals(
+    pipeline_metadata, sample_discovery_output, sample_research_output, sample_script_output,
+):
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=[])
+    assert "Strong fundamentals" in msg
+
+
+def test_build_user_message_includes_benchmark_scripts(
+    pipeline_metadata, sample_discovery_output, sample_research_output,
+    sample_script_output, sample_benchmark_scripts,
+):
+    benchmarks = [row[0] for row in sample_benchmark_scripts]
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=benchmarks)
+    assert "pasta-sorter" in msg
+    assert "Benchmark" in msg
+
+
+def test_build_user_message_handles_no_benchmarks(
+    pipeline_metadata, sample_discovery_output, sample_research_output, sample_script_output,
+):
+    event = {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+    }
+    msg = _build_user_message(event, benchmarks=[])
+    assert "Benchmark" not in msg or "no benchmark" in msg.lower()
+```
+
+#### Full Handler Tests
+
+```python
+import json
+from unittest.mock import patch
+
+import pytest
+
+VALID_PASS_HANDLER_OUTPUT = json.dumps({
+    "verdict": "PASS",
+    "score": 8,
+    "notes": "Strong character voices, specific jokes about testrepo.",
+})
+
+VALID_FAIL_HANDLER_OUTPUT = json.dumps({
+    "verdict": "FAIL",
+    "score": 4,
+    "feedback": "The hiring segment uses generic praise. Reference specific repos.",
+    "issues": [
+        "Hiring segment uses generic praise",
+        "Roast's compliment is too vague",
+    ],
+})
+
+
+def test_handler_returns_valid_pass_output(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.return_value = VALID_PASS_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    assert result["verdict"] == "PASS"
+    assert isinstance(result["score"], int)
+    assert result["score"] == 8
+
+
+def test_handler_returns_valid_fail_output(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.return_value = VALID_FAIL_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    assert result["verdict"] == "FAIL"
+    assert isinstance(result["score"], int)
+    assert "feedback" in result
+    assert "issues" in result
+    assert isinstance(result["issues"], list)
+    assert len(result["issues"]) >= 1
+
+
+def test_handler_calls_invoke_model_not_invoke_with_tools(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.return_value = VALID_PASS_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    mock_producer_invoke_model.assert_called_once()
+    call_kwargs = mock_producer_invoke_model.call_args
+    # invoke_model takes user_message and system_prompt, NOT tools or tool_executor
+    assert "tools" not in (call_kwargs.kwargs or {})
+    assert "tool_executor" not in (call_kwargs.kwargs or {})
+
+
+def test_handler_reads_script_discovery_research_from_event(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.return_value = VALID_PASS_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    user_message = mock_producer_invoke_model.call_args[1].get(
+        "user_message", mock_producer_invoke_model.call_args[0][0]
+    )
+    # Script text
+    assert "Welcome to 0 Stars" in user_message
+    # Discovery data
+    assert "testrepo" in user_message
+    # Research data
+    assert "Strong fundamentals" in user_message
+
+
+def test_handler_queries_database_for_benchmark_scripts(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.return_value = VALID_PASS_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    mock_producer_db_query.assert_called_once()
+
+
+def test_handler_handles_fenced_output(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.return_value = f"```json\n{VALID_PASS_HANDLER_OUTPUT}\n```"
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    assert result["verdict"] == "PASS"
+
+
+def test_handler_handles_empty_benchmark_results(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_db_query.return_value = []  # no episodes exist yet
+    mock_producer_invoke_model.return_value = VALID_PASS_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    assert result["verdict"] == "PASS"
+
+
+def test_handler_propagates_runtime_error_from_invoke_model(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_invoke_model.side_effect = RuntimeError("Bedrock throttled")
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        with pytest.raises(RuntimeError, match="Bedrock"):
+            lambda_handler(
+                {
+                    "metadata": pipeline_metadata,
+                    "discovery": sample_discovery_output,
+                    "research": sample_research_output,
+                    "script": sample_script_output,
+                },
+                lambda_context,
+            )
+```
+
 ### Integration Test Pattern
 
 Integration tests hit real AWS services and external APIs. They are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
@@ -1848,6 +2344,32 @@ def test_github_search_api_returns_expected_structure():
     assert "total_count" in data
     assert "items" in data
     assert isinstance(data["items"], list)
+```
+
+#### Producer Integration Test (`tests/integration/test_db_live.py` — add to existing file)
+
+This verifies that the Producer's benchmark query returns the expected data shape from a real Postgres database. The benchmark query joins `episodes` with `episode_metrics` — this test confirms the join works and returns `script_text` values.
+
+```python
+@pytest.mark.integration
+def test_producer_db_benchmark_query():
+    """The Producer benchmark query returns script_text strings from top-performing episodes."""
+    from shared.db import query
+
+    rows = query(
+        """
+        SELECT e.script_text
+        FROM episodes e
+        JOIN episode_metrics em ON e.episode_id = em.episode_id
+        ORDER BY (em.views + em.likes * 2 + em.comments * 3 + em.shares * 5) DESC
+        LIMIT 3
+        """
+    )
+    # May be empty if no episodes exist yet — that is valid
+    assert isinstance(rows, list)
+    for row in rows:
+        assert isinstance(row[0], str)
+        assert len(row[0]) > 0
 ```
 
 **Resource isolation:** Integration tests must use unique prefixes for S3 keys and DB test data (e.g., the GitHub Actions run ID or commit SHA) to prevent conflicts when multiple CI runs execute in parallel. Clean up test resources in a `finally` block or pytest `teardown` fixture.
@@ -2131,6 +2653,148 @@ def test_script_e2e_produces_valid_output():
     assert result["featured_developer"] == "torvalds"
 ```
 
+#### Producer E2E Test (`tests/e2e/test_producer_e2e.py`)
+
+```python
+import json
+import os
+
+import pytest
+
+
+@pytest.mark.e2e
+@pytest.mark.skip(
+    reason="E2E: costs money (Bedrock). Run manually: "
+    "pytest tests/e2e/test_producer_e2e.py -v -m e2e --override-ini='addopts='"
+)
+def test_producer_e2e_produces_valid_output():
+    """Invoke Producer handler with real Bedrock and real database.
+
+    Verifies:
+    1. Output has verdict and score fields
+    2. verdict is "PASS" or "FAIL"
+    3. score is an integer 1-10
+    4. If PASS: notes is present (or absent — both valid)
+    5. If FAIL: feedback and issues are present and non-empty
+    """
+    from unittest.mock import MagicMock
+
+    # Set LAMBDA_TASK_ROOT so the handler can find prompts/producer.md
+    os.environ.setdefault(
+        "LAMBDA_TASK_ROOT",
+        os.path.join(os.path.dirname(__file__), "..", "..", "lambdas", "producer"),
+    )
+
+    from lambdas.producer.handler import lambda_handler
+
+    # Use a known script that should pass evaluation
+    script_text = (
+        "**Hype:** Welcome back to 0 Stars, 10 out of 10! Today we found linux by torvalds!\n"
+        "**Roast:** Zero stars on our show, mass adoption everywhere else. Bit of a gap.\n"
+        "**Phil:** But what is a kernel, really? The seed from which all computation grows?\n"
+        "**Hype:** This developer built an entire operating system! From scratch!\n"
+        "**Roast:** With 30 million lines of code. My linter just fainted.\n"
+        "**Phil:** To write 30 million lines is not to code. It is to speak a new language into existence.\n"
+        "**Hype:** Let me tell you about this developer. Seven repos. Created Git!\n"
+        "**Roast:** Created the tool we all use to argue about merge strategies. Thanks for that.\n"
+        "**Phil:** To fork or not to fork. The eternal commit.\n"
+        "**Roast:** Fine. The module system is genuinely elegant. You can extend the kernel without rebuilding it. That takes real architectural thinking.\n"
+        "**Hype:** He said it! He said something nice!\n"
+        "**Phil:** When the cynic finds elegance in monolithic design, the paradigm shifts.\n"
+        "**Hype:** Any hiring manager would give this developer a corner office immediately!\n"
+        "**Roast:** Built and maintained software running on billions of devices. That is not a resume line, that is a geological event.\n"
+        "**Phil:** Can a commit history ever truly capture a life's work?\n"
+        "**Hype:** That is all for today! Zero stars, ten out of ten! Remember the kernel!\n"
+        "**Roast:** Same time next week. Try not to rebase anything.\n"
+        "**Phil:** But what is time, if not a branch we never merge?"
+    )
+
+    event = {
+        "metadata": {
+            "execution_id": "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:e2e-test",
+            "script_attempt": 1,
+        },
+        "discovery": {
+            "repo_url": "https://github.com/torvalds/linux",
+            "repo_name": "linux",
+            "repo_description": "Linux kernel source tree",
+            "developer_github": "torvalds",
+            "star_count": 0,
+            "language": "C",
+            "discovery_rationale": "E2E test input",
+            "key_files": ["README", "Makefile", "kernel/sched/core.c"],
+            "technical_highlights": [
+                "Monolithic kernel with loadable module support",
+                "Custom build system spanning thousands of Makefiles",
+            ],
+        },
+        "research": {
+            "developer_name": "Linus Torvalds",
+            "developer_github": "torvalds",
+            "developer_bio": "",
+            "public_repos_count": 7,
+            "notable_repos": [
+                {"name": "linux", "description": "Linux kernel source tree", "stars": 0, "language": "C"},
+            ],
+            "commit_patterns": "Created Git to manage Linux kernel development",
+            "technical_profile": "C systems programmer, kernel development, version control",
+            "interesting_findings": [
+                "Created both Linux and Git",
+                "Known for colorful code review feedback",
+            ],
+            "hiring_signals": [
+                "Built and maintained a project used by billions of devices",
+                "Created a version control system used by virtually every software team on Earth",
+            ],
+        },
+        "script": {
+            "text": script_text,
+            "character_count": len(script_text),
+            "segments": [
+                "intro", "core_debate", "developer_deep_dive",
+                "technical_appreciation", "hiring_manager", "outro",
+            ],
+            "featured_repo": "linux",
+            "featured_developer": "torvalds",
+            "cover_art_suggestion": "A penguin surrounded by terminal windows, three robot silhouettes in a podcast studio",
+        },
+    }
+    context = MagicMock()
+    context.function_name = "e2e-test-producer"
+
+    result = lambda_handler(event, context)
+
+    # Validate output shape
+    assert "verdict" in result, "Missing required field: verdict"
+    assert "score" in result, "Missing required field: score"
+
+    # Validate verdict
+    assert result["verdict"] in ("PASS", "FAIL"), (
+        f"verdict must be 'PASS' or 'FAIL', got '{result['verdict']}'"
+    )
+
+    # Validate score
+    assert isinstance(result["score"], int), f"score must be int, got {type(result['score'])}"
+    assert 1 <= result["score"] <= 10, f"score must be 1-10, got {result['score']}"
+
+    # Validate verdict-specific fields
+    if result["verdict"] == "PASS":
+        # notes is optional on PASS
+        if "notes" in result:
+            assert isinstance(result["notes"], str)
+    else:
+        assert "feedback" in result, "FAIL verdict must include feedback"
+        assert isinstance(result["feedback"], str)
+        assert len(result["feedback"]) > 0, "feedback must be non-empty"
+
+        assert "issues" in result, "FAIL verdict must include issues"
+        assert isinstance(result["issues"], list)
+        assert len(result["issues"]) >= 1, "issues must have at least one entry"
+        for issue in result["issues"]:
+            assert isinstance(issue, str)
+            assert len(issue) > 0, "each issue must be a non-empty string"
+```
+
 ### Per-Handler Test Requirements
 
 Each handler's unit test file must verify:
@@ -2140,7 +2804,7 @@ Each handler's unit test file must verify:
 | Discovery | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); star_count >= 10 rejected; string star_count coerced to int; missing required field rejected; invalid repo_url rejected; invalid JSON rejected. **psql tool:** SELECT allowed; INSERT/DELETE/DROP/UPDATE each rejected; leading whitespace SELECT allowed; psql stderr returns error dict; subprocess timeout returns error dict. **GitHub tool:** curated fields returned (no extra fields); null license handled; HTTP error returns error dict. **Exa tool:** snake_case inputs mapped to camelCase in request body; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each tool name; unknown tool returns error dict. **Full handler:** returns valid DiscoveryOutput; passes 3 tools and executor to invoke_with_tools; rejects high star_count from agent; handles fenced output from agent. |
 | Research | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); string `public_repos_count` coerced to int; null `developer_bio` coerced to empty string; missing required field rejected; invalid JSON rejected; `notable_repos` entry missing required sub-field rejected; empty `notable_repos` accepted. **`get_github_user` tool:** curated fields returned (login, name, bio, public_repos, followers, created_at, html_url — no extra fields like id, avatar_url); null name handled; null bio handled; HTTP error returns error dict; socket timeout returns error dict. **`get_user_repos` tool:** returns array of curated repo objects (name, description, stargazers_count, language, html_url, pushed_at, fork — no extra fields); HTTP error returns error dict. **`get_repo_details` tool:** curated fields returned (name, full_name, description, stargazers_count, forks_count, language, topics, created_at, updated_at, html_url — no extra fields); null description handled; HTTP error returns error dict. **`get_repo_readme` tool:** returns decoded content string (base64 decoded by tool); 404 (no README) returns error dict; HTTP error returns error dict. **`search_repositories` tool:** returns `total_count` and curated items array; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each of 5 tool names; unknown tool returns error dict. **Full handler:** returns valid ResearchOutput; passes 5 tools and executor to invoke_with_tools; reads `$.discovery.developer_github`, `$.discovery.repo_name`, and `$.discovery.repo_url` from input event; handles missing developer bio (null → empty string); handles user with zero repos (empty `notable_repos` valid); handles fenced output from agent; propagates RuntimeError from invoke_with_tools. |
 | Script | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); `character_count` >= 5,000 rejected; string `character_count` coerced to int; inaccurate `character_count` overwritten with `len(text)`; missing required field rejected; invalid JSON rejected; wrong segments rejected; segments in wrong order rejected; text at 4,999 characters accepted; text at 5,000 characters rejected. **User message building:** includes discovery data (repo_name, language, technical_highlights); includes research data (developer_name, hiring_signals, interesting_findings); includes attempt number; omits producer feedback on first attempt; includes producer feedback and issues on retry (`script_attempt > 1`). **Full handler:** returns valid ScriptOutput; calls `invoke_model` (not `invoke_with_tools`) with no tools or tool_executor; user message contains discovery data; user message contains research data; first attempt has no feedback in message; retry includes producer feedback and all issues; handles fenced output from agent; raises ValueError on character count exceeded; raises ValueError/JSONDecodeError on invalid JSON from model; propagates RuntimeError from invoke_model. |
-| Producer | Returns `verdict: "PASS"` or `"FAIL"` with correct fields; FAIL includes `feedback` and `issues`; character count over 5,000 triggers FAIL |
+| Producer | **Output parsing:** valid PASS JSON; valid FAIL JSON; fenced JSON (` ```json ` and ` ``` `); missing `verdict` rejected; missing `score` rejected; invalid `verdict` value (not "PASS" or "FAIL") rejected; FAIL missing `feedback` rejected; FAIL missing `issues` rejected; PASS with `notes` accepted; PASS without `notes` accepted; string `score` coerced to int; invalid JSON rejected. **User message building:** includes script text; includes character count; includes discovery `repo_name`; includes discovery `repo_description`; includes research `hiring_signals`; includes benchmark scripts when available; handles no benchmark scripts gracefully (no crash, no misleading benchmark section). **Full handler:** returns valid PASS ProducerOutput; returns valid FAIL ProducerOutput; calls `invoke_model` (not `invoke_with_tools`) with no tools or tool_executor; reads script, discovery, and research data from event and passes them in user message; queries database for benchmark scripts via `shared.db.query`; handles fenced output from agent; handles empty benchmark results (no episodes in DB); propagates RuntimeError from invoke_model. |
 | Cover Art | Output matches `CoverArtOutput` shape; S3 key follows `episodes/{execution_id}/cover.png` pattern |
 | TTS | Output matches `TTSOutput` shape; correctly parses `**Hype:**`, `**Roast:**`, `**Phil:**` labels; raises exception on malformed script lines |
 | Post-Production | Output matches `PostProductionOutput` shape; writes to `episodes` table; writes to `featured_developers` table |
