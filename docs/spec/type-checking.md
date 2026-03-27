@@ -278,6 +278,76 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOut
 - The module-level globals `_db_connection_string` and `_exa_api_key` are typed as `str | None` and narrowed inside their getter functions via the `global` + `if is None` pattern.
 - `TOOL_DEFINITIONS` is typed as `list[ToolDefinition]` (alias for `list[dict[str, Any]]`).
 
+### Script Handler Internal Function Signatures
+
+The Script handler (`lambdas/script/handler.py`) is simpler than Discovery and Research because it uses `invoke_model` (single prompt-response) rather than `invoke_with_tools` (agentic tool loop). There are no tool definitions, no tool executor functions, and no dispatcher. The handler's job is to assemble a user message from upstream state, call Bedrock once, and parse the response.
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import re
+
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.bedrock import invoke_model
+from shared.logging import get_logger
+from shared.types import PipelineState, ScriptOutput
+
+logger = get_logger("script")
+
+# --- Module-level constants ---
+MAX_SCRIPT_CHARACTERS: int = 5000
+
+REQUIRED_SEGMENTS: list[str] = [
+    "intro", "core_debate", "developer_deep_dive",
+    "technical_appreciation", "hiring_manager", "outro",
+]
+
+SPEAKER_PATTERN: re.Pattern[str] = re.compile(
+    r"^\*\*(?:Hype|Roast|Phil):\*\*\s+.+$"
+)
+
+
+def _load_system_prompt() -> str:
+    """Read prompts/script.md from disk. Uses LAMBDA_TASK_ROOT."""
+    ...
+
+
+def _build_user_message(event: PipelineState) -> str:
+    """Assemble discovery + research + optional producer feedback into a user message.
+
+    Extracts $.discovery.*, $.research.*, and (on retry) $.producer.feedback
+    and $.producer.issues from the pipeline state. Returns a structured plain-text
+    message with clear section headers.
+    """
+    ...
+
+
+def _parse_script_output(text: str) -> ScriptOutput:
+    """Parse agent text response to ScriptOutput. Strips markdown fences, validates.
+
+    Overwrites character_count with actual len(text) if the model miscounted.
+    Raises ValueError if character_count >= 5000 or required fields/segments are wrong.
+    """
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> ScriptOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- No `boto3` import — Script does not fetch secrets from SSM or Secrets Manager. It only calls Bedrock via the shared `invoke_model` function, which manages the boto3 client internally.
+- No `ToolDefinition`, `ToolExecutor`, or `_execute_tool` — Script has no Bedrock tools. It sends a single prompt and receives a single response.
+- `_build_user_message` returns `str` (plain text with section headers, not JSON). The function reads `event["discovery"]`, `event["research"]`, and optionally `event["producer"]` (when `event["metadata"]["script_attempt"] > 1`).
+- `_parse_script_output` returns `ScriptOutput` (TypedDict). It overwrites the `character_count` field with `len(data["text"])` rather than trusting the model's self-reported count, since LLMs frequently miscount characters. The actual length is then validated against `MAX_SCRIPT_CHARACTERS`.
+- `SPEAKER_PATTERN` is typed as `re.Pattern[str]` (compiled regex). It is used for warning-level validation of script line format — lines that do not match are logged but do not cause a `ValueError`. Hard rejection of malformed lines belongs in the TTS Lambda.
+- `REQUIRED_SEGMENTS` is typed as `list[str]`. The parser checks `data["segments"] == REQUIRED_SEGMENTS` (exact match, order matters).
+
 ### Typing Conventions
 
 - Every function in shared modules (`bedrock.py`, `db.py`, `s3.py`, `logging.py`) must have full type annotations — parameters and return types.
