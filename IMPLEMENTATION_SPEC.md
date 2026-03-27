@@ -22,6 +22,7 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | [Type Checking](docs/spec/type-checking.md) | mypy strict config, TypedDict definitions |
 | [Testing](docs/spec/testing.md) | pytest setup, unit/integration/e2e tests |
 | [CI Pipeline](docs/spec/ci-pipeline.md) | GitHub Actions workflow, ruff config |
+| [MCP Server](docs/spec/mcp-server.md) | MCP control plane — tools, resources, Lambda architecture |
 
 ---
 
@@ -39,7 +40,11 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | Lambda memory (site) | 256 MB |
 | CloudWatch log retention | 14 days |
 | CloudFront TTL | 3600 seconds (1 hour) |
-| EventBridge schedule | `cron(0 9 ? * SUN *)` with `schedule_expression_timezone = "America/New_York"` |
+| EventBridge schedule | Removed — replaced by MCP server |
+| MCP Lambda memory | 512 MB |
+| MCP Lambda timeout | 300 seconds |
+| MCP Function URL auth | `AWS_IAM` |
+| MCP Function URL invoke mode | `RESPONSE_STREAM` |
 | Bedrock Claude model ID | `us.anthropic.claude-sonnet-4-6` |
 | Bedrock Nova Canvas model ID | `amazon.nova-canvas-v1:0` |
 | ElevenLabs model | `eleven_v3` |

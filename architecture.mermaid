@@ -1,7 +1,8 @@
 %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a1a2e', 'primaryTextColor': '#e0e0e0', 'primaryBorderColor': '#4a4a6a', 'lineColor': '#7c7caa', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f3460', 'background': '#0a0a1a', 'mainBkg': '#1a1a2e', 'nodeBorder': '#4a4a6a', 'clusterBkg': '#12122a', 'clusterBorder': '#3a3a5c', 'titleColor': '#ffffff', 'edgeLabelBackground': '#1a1a2e', 'fontFamily': 'Inter, Segoe UI, sans-serif', 'fontSize': '14px'}}}%%
 
 graph TB
-    CRON["⏰ EventBridge Scheduler<br/><i>Weekly cron · Sunday 9 AM ET</i>"]
+    CLAUDEAI["☁️ claude.ai<br/><i>MCP Client</i>"]
+    MCP["🤖 MCP SERVER<br/>Lambda Function URL<br/><i>Control plane · IAM auth</i>"]
 
     subgraph SF["  AWS Step Functions · Standard Workflow  "]
         direction TB
@@ -34,7 +35,12 @@ graph TB
     RDS[("RDS Postgres<br/>Episodes · Metrics<br/>Featured Devs")]
     SITE["🌐 Dynamic Site<br/>Lambda Function URL<br/>+ CloudFront"]
 
-    CRON ==> SF
+    CLAUDEAI ==> MCP
+    MCP ==> SF
+    MCP -. "invoke agents<br/>directly" .-> SF
+    MCP -. "query episodes<br/>+ metrics" .-> RDS
+    MCP -. "presigned URLs<br/>+ list assets" .-> S3
+    MCP -. "cache invalidation<br/>+ status" .-> SITE
 
     DISCOVERY -.-> EXA
     DISCOVERY -.-> BEDROCK
@@ -56,6 +62,7 @@ graph TB
     S3 --> SITE
 
     classDef trigger fill:#e17055,stroke:#d63031,color:#fff,font-weight:bold,stroke-width:2px
+    classDef mcp fill:#a29bfe,stroke:#6c5ce7,color:#fff,font-weight:bold,stroke-width:2px
     classDef agent fill:#0984e3,stroke:#74b9ff,color:#fff,font-weight:bold,stroke-width:2px
     classDef evaluator fill:#6c5ce7,stroke:#a29bfe,color:#fff,font-weight:bold,stroke-width:2px
     classDef choice fill:#fdcb6e,stroke:#ffeaa7,color:#2d3436,font-weight:bold,stroke-width:2px
@@ -64,7 +71,8 @@ graph TB
     classDef storage fill:#2d3436,stroke:#636e72,color:#dfe6e9,stroke-width:2px
     classDef site fill:#00cec9,stroke:#81ecec,color:#2d3436,font-weight:bold,stroke-width:2px
 
-    class CRON trigger
+    class CLAUDEAI trigger
+    class MCP mcp
     class DISCOVERY,RESEARCH,SCRIPT agent
     class PRODUCER evaluator
     class CHOICE choice

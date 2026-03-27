@@ -1,6 +1,6 @@
 # 0 Stars, 10/10
 
-A closed-loop multi-agent podcast pipeline on AWS. Every week, four AI agents collaborate to discover an underrated GitHub project, research the developer, write a comedy podcast script, evaluate it, generate cover art, produce audio, and publish the episode — with zero human intervention.
+A closed-loop multi-agent podcast pipeline on AWS. AI agents collaborate to discover an underrated GitHub project, research the developer, write a comedy podcast script, evaluate it, generate cover art, produce audio, and publish the episode. An MCP server exposes the entire pipeline as tools on claude.ai — trigger episodes, invoke individual agents, observe logs, query the database, and manage assets from a conversation.
 
 Three AI personas — **Hype** (the relentless optimist), **Roast** (dry British wit), and **Phil** (the existential philosopher) — discuss small, obscure GitHub projects with very few stars and hype up the developers who built them.
 
@@ -12,7 +12,8 @@ Three AI personas — **Hype** (the relentless optimist), **Roast** (dry British
 %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a1a2e', 'primaryTextColor': '#e0e0e0', 'primaryBorderColor': '#4a4a6a', 'lineColor': '#7c7caa', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f3460', 'background': '#0a0a1a', 'mainBkg': '#1a1a2e', 'nodeBorder': '#4a4a6a', 'clusterBkg': '#12122a', 'clusterBorder': '#3a3a5c', 'titleColor': '#ffffff', 'edgeLabelBackground': '#1a1a2e', 'fontFamily': 'Inter, Segoe UI, sans-serif', 'fontSize': '14px'}}}%%
 
 graph TB
-    CRON["⏰ EventBridge Scheduler<br/><i>Weekly cron · Sunday 9 AM ET</i>"]
+    CLAUDEAI["☁️ claude.ai<br/><i>MCP Client</i>"]
+    MCP["🤖 MCP SERVER<br/>Lambda Function URL<br/><i>Control plane · IAM auth</i>"]
 
     subgraph SF["  AWS Step Functions · Standard Workflow  "]
         direction TB
@@ -45,7 +46,12 @@ graph TB
     RDS[("RDS Postgres<br/>Episodes · Metrics<br/>Featured Devs")]
     SITE["🌐 Dynamic Site<br/>Lambda Function URL<br/>+ CloudFront"]
 
-    CRON ==> SF
+    CLAUDEAI ==> MCP
+    MCP ==> SF
+    MCP -. "invoke agents<br/>directly" .-> SF
+    MCP -. "query episodes<br/>+ metrics" .-> RDS
+    MCP -. "presigned URLs<br/>+ list assets" .-> S3
+    MCP -. "cache invalidation<br/>+ status" .-> SITE
 
     DISCOVERY -.-> EXA
     DISCOVERY -.-> BEDROCK
@@ -67,6 +73,7 @@ graph TB
     S3 --> SITE
 
     classDef trigger fill:#e17055,stroke:#d63031,color:#fff,font-weight:bold,stroke-width:2px
+    classDef mcp fill:#a29bfe,stroke:#6c5ce7,color:#fff,font-weight:bold,stroke-width:2px
     classDef agent fill:#0984e3,stroke:#74b9ff,color:#fff,font-weight:bold,stroke-width:2px
     classDef evaluator fill:#6c5ce7,stroke:#a29bfe,color:#fff,font-weight:bold,stroke-width:2px
     classDef choice fill:#fdcb6e,stroke:#ffeaa7,color:#2d3436,font-weight:bold,stroke-width:2px
@@ -75,7 +82,8 @@ graph TB
     classDef storage fill:#2d3436,stroke:#636e72,color:#dfe6e9,stroke-width:2px
     classDef site fill:#00cec9,stroke:#81ecec,color:#2d3436,font-weight:bold,stroke-width:2px
 
-    class CRON trigger
+    class CLAUDEAI trigger
+    class MCP mcp
     class DISCOVERY,RESEARCH,SCRIPT agent
     class PRODUCER evaluator
     class CHOICE choice
@@ -88,7 +96,10 @@ graph TB
 ### Pipeline Flow
 
 ```
-EventBridge Scheduler (weekly cron)
+claude.ai (MCP Client)
+        │
+        ▼
+MCP Server Lambda (Function URL · IAM auth)
         │
         ▼
 Step Functions State Machine (Standard)
@@ -153,7 +164,7 @@ Everything is Terraform. Everything is serverless.
 | Storage | S3 | Episode assets (MP3, MP4, cover art) |
 | Database | RDS Postgres | Episode catalog, metrics, featured devs |
 | Website | Lambda Function URL + CloudFront | Dynamic podcast site |
-| Scheduling | EventBridge Scheduler | Weekly cron trigger |
+| Control Plane | MCP Server (Lambda) | Pipeline trigger, observation, management via claude.ai |
 | Secrets | Secrets Manager | API keys (ElevenLabs, Exa) |
 | Monitoring | CloudWatch | Logs, alarms |
 | Media | Lambda Layer (ffmpeg) | Audio → video conversion |
@@ -166,7 +177,7 @@ Everything is Terraform. Everything is serverless.
 │   ├── variables.tf
 │   ├── outputs.tf
 │   ├── step-functions.tf
-│   ├── scheduling.tf
+│   ├── mcp.tf
 │   ├── rds.tf
 │   ├── s3.tf
 │   ├── site.tf
@@ -193,9 +204,12 @@ Everything is Terraform. Everything is serverless.
 │   │   └── handler.py
 │   ├── post-production/
 │   │   └── handler.py
-│   └── site/
+│   ├── site/
+│   │   ├── handler.py
+│   │   └── templates/
+│   └── mcp/                   # MCP control plane (26 tools, 5 resources)
 │       ├── handler.py
-│       └── templates/
+│       └── tools/
 ├── layers/
 │   └── ffmpeg/
 ├── site/                        # Static assets (CSS, images)
