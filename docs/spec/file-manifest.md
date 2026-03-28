@@ -5,6 +5,7 @@
 Every file below must be created. No other files should be created.
 
 ```
+├── build-all.sh
 ├── pyproject.toml
 ├── .github/
 │   └── workflows/
@@ -55,11 +56,15 @@ Every file below must be created. No other files should be created.
 │   │   └── handler.py
 │   ├── post_production/
 │   │   └── handler.py
-│   └── site/
+│   ├── site/
+│   │   ├── handler.py
+│   │   ├── build.sh
+│   │   └── templates/
+│   │       ├── base.html
+│   │       └── index.html
+│   └── mcp/
 │       ├── handler.py
-│       └── templates/
-│           ├── base.html
-│           └── index.html
+│       └── build.sh
 ├── layers/
 │   ├── ffmpeg/
 │   │   └── build.sh
@@ -134,6 +139,7 @@ Every file below must be created. No other files should be created.
 | `lambdas/cover_art/prompts/cover_art.md` | Prompt template for Nova Canvas. Three robot personas, visual reference to featured project, "0 STARS / 10/10" title, episode subtitle. |
 | `lambdas/tts/handler.py` | TTS handler. Parses the approved script into dialogue turns. Calls ElevenLabs `/v1/text-to-dialogue` API. Uploads MP3 to S3. |
 | `lambdas/post_production/handler.py` | Post-production. Downloads cover art PNG and MP3 from S3. Runs ffmpeg to produce MP4. Uploads MP4 to S3. Writes episode record to Postgres `episodes` table. Writes to `featured_developers` table. |
+| `lambdas/mcp/handler.py` | MCP server handler. Exposes pipeline control tools (trigger run, check status) via Streamable HTTP transport. See [MCP Server](./mcp-server.md). |
 | `lambdas/site/handler.py` | Website handler. Queries `episodes` table from Postgres. Renders Jinja2 templates. Returns HTML response. Handles Lambda Function URL event format. |
 | `lambdas/site/templates/base.html` | Base HTML template. Minimal styling (inline CSS, no external dependencies). Dark theme. Includes `<head>`, nav with podcast title, footer. |
 | `lambdas/site/templates/index.html` | Extends base. Lists episodes reverse-chronologically. Each episode shows: title (repo name), developer name, air date, star count at recording, embedded HTML5 audio player (presigned S3 URL for MP3), cover art image. |
@@ -175,5 +181,8 @@ Every file below must be created. No other files should be created.
 |------|---------|
 | `lambdas/shared/build.sh` | Shell script that pip-installs `psycopg2-binary` and `aws-lambda-powertools` (with pinned versions, targeting `manylinux2014_x86_64`) into the `python/` directory alongside the shared source modules, then zips everything into `build/shared-layer.zip`. Run before `terraform plan`. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `layers/ffmpeg/build.sh` | Shell script that downloads a prebuilt Lambda-compatible ffmpeg binary (from `johnvansickle.com/ffmpeg` — the standard source for static ffmpeg builds), creates the Lambda Layer directory structure (`bin/ffmpeg`), and zips it. Output: `layers/ffmpeg/ffmpeg-layer.zip`. Run once manually before `terraform apply`. |
+| `lambdas/site/build.sh` | Shell script that pip-installs `jinja2` (pinned version) into the site Lambda directory. Run before `terraform plan` (or via `build-all.sh`). See [Packaging & Deployment](./packaging-and-deployment.md). |
+| `lambdas/mcp/build.sh` | Shell script that pip-installs `mcp[cli]` (pinned version, targeting `manylinux2014_x86_64`) into the MCP Lambda directory. Run before `terraform plan` (or via `build-all.sh`). See [Packaging & Deployment](./packaging-and-deployment.md). |
+| `build-all.sh` | Top-level build orchestration script. Runs all layer builds and Lambda pip installs in parallel. Run before `terraform plan`. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `layers/psql/build.sh` | Shell script that downloads PostgreSQL 16 RPMs for RHEL 9 (AL2023-compatible), extracts the `psql` binary and `libpq` shared library, and packages them as a Lambda Layer. Output: `layers/psql/psql-layer.zip`. Run once manually before `terraform apply`. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `README.md` | Project README. Already exists — no changes needed during implementation. |
