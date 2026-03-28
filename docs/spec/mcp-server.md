@@ -2,9 +2,9 @@
 
 # MCP Server
 
-An MCP (Model Context Protocol) server that replaces the EventBridge cron schedule with an interactive control plane. Instead of automated weekly runs, episodes are triggered, observed, and managed through MCP tools from claude.ai. The server runs as a Lambda behind a Function URL using Streamable HTTP transport.
+An MCP (Model Context Protocol) server that provides an interactive control plane for the podcast pipeline. Episodes are triggered, observed, and managed through MCP tools from claude.ai. The server runs as a Lambda behind a Function URL using Streamable HTTP transport.
 
-This spec covers the tool surface, resource definitions, Lambda architecture, Terraform changes, and the removal of the EventBridge schedule.
+This spec covers the tool surface, resource definitions, Lambda architecture, and Terraform changes.
 
 ## Transport and Hosting
 
@@ -934,22 +934,6 @@ To support `retry_from_step`, the state machine ASL in `terraform/step-functions
 ```
 
 `InitializeMetadata.Next` changes from `"Discovery"` to `"ResumeRouter"`.
-
-### Removal of `terraform/scheduling.tf`
-
-The entire file is removed:
-
-| Removed Resource | Type |
-|-----------------|------|
-| EventBridge Scheduler rule | `aws_scheduler_schedule` |
-| Scheduler IAM role | `aws_iam_role` |
-| Scheduler IAM policy | `aws_iam_role_policy` |
-
-**Migration notes:**
-- No data loss — the scheduler only triggers executions, stores no state.
-- The state machine itself is unchanged (aside from the `ResumeRouter` addition).
-- Verify no execution is currently running before applying: `aws stepfunctions list-executions --state-machine-arn <arn> --status-filter RUNNING`.
-- Keep `scheduling.tf` in git history for easy rollback.
 
 ---
 

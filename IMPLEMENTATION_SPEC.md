@@ -40,7 +40,6 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | Lambda memory (site) | 256 MB |
 | CloudWatch log retention | 14 days |
 | CloudFront TTL | 3600 seconds (1 hour) |
-| EventBridge schedule | Removed — replaced by MCP server |
 | MCP Lambda memory | 512 MB |
 | MCP Lambda timeout | 300 seconds |
 | MCP Function URL auth | `AWS_IAM` |
