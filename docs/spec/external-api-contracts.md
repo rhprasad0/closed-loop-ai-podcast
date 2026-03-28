@@ -103,7 +103,13 @@ result = json.loads(response["body"].read())
 
 Used by: Cover Art Lambda.
 
+**Client configuration:** The boto3 Bedrock Runtime client must be created with `read_timeout=300` (via `botocore.config.Config`). The default 60-second timeout is too short for Nova Canvas image generation per AWS documentation.
+
 ```python
+from botocore.config import Config
+
+client = boto3.client("bedrock-runtime", config=Config(read_timeout=300))
+
 response = client.invoke_model(
     modelId="amazon.nova-canvas-v1:0",
     contentType="application/json",
@@ -111,7 +117,7 @@ response = client.invoke_model(
     body=json.dumps({
         "taskType": "TEXT_IMAGE",
         "textToImageParams": {
-            "text": cover_art_prompt
+            "text": cover_art_prompt  # 1-1024 characters (hard limit)
         },
         "imageGenerationConfig": {
             "numberOfImages": 1,
@@ -122,8 +128,39 @@ response = client.invoke_model(
     })
 )
 result = json.loads(response["body"].read())
+# Check for RAI policy error — images may be filtered or absent
+if result.get("error"):
+    raise RuntimeError(f"Nova Canvas RAI policy: {result['error']}")
 image_bytes = base64.b64decode(result["images"][0])
 ```
+
+**Request body fields:**
+
+| Field | Type | Required | Constraint | Default |
+|-------|------|----------|------------|---------|
+| `taskType` | string | yes | `"TEXT_IMAGE"` | — |
+| `textToImageParams.text` | string | yes | **1-1024 characters** | — |
+| `textToImageParams.negativeText` | string | no | 1-1024 characters | — |
+| `textToImageParams.style` | string | no | One of 8 presets (not used in v1) | — |
+| `imageGenerationConfig.numberOfImages` | int | no | 1-5 | 1 |
+| `imageGenerationConfig.width` | int | no | 320-4096, divisible by 16 | 1024 |
+| `imageGenerationConfig.height` | int | no | 320-4096, divisible by 16 | 1024 |
+| `imageGenerationConfig.quality` | string | no | `"standard"` or `"premium"` | `"standard"` |
+| `imageGenerationConfig.cfgScale` | float | no | 1.1-10.0 | 6.5 |
+| `imageGenerationConfig.seed` | int | no | 0-2,147,483,646 | 12 |
+
+**Resolution constraints:** Each side 320-4096px, divisible by 16, aspect ratio between 1:4 and 4:1, total pixels < 4,194,304.
+
+**Response body:**
+
+```json
+{
+    "images": ["<base64-encoded PNG>"],
+    "error": "string (present only when RAI flags the image)"
+}
+```
+
+The `images` array may contain fewer entries than `numberOfImages` if some are blocked by AWS Responsible AI content moderation. The `error` field is present only when at least one image was flagged.
 
 ### ElevenLabs — Text-to-Dialogue (TTS)
 

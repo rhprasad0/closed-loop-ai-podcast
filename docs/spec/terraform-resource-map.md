@@ -62,6 +62,7 @@ logging_config {
 |----------|-------|
 | `POWERTOOLS_SERVICE_NAME` | Function-specific: `discovery`, `research`, `script`, `producer`, `cover_art`, `tts`, `post_production`, `site` |
 | `POWERTOOLS_LOG_LEVEL` | `INFO` |
+| `S3_BUCKET` | Cover Art, Post-Production, Site: `aws_s3_bucket.episodes.id` (the episodes bucket name) |
 
 **Per-Lambda IAM permissions:**
 
@@ -71,7 +72,7 @@ logging_config {
 | Research | `bedrock:InvokeModel` |
 | Script | `bedrock:InvokeModel` |
 | Producer | `bedrock:InvokeModel` |
-| Cover Art | `bedrock:InvokeModel` (Nova Canvas) |
+| Cover Art | `bedrock:InvokeModel` (Nova Canvas), S3 write (`s3:PutObject` on episodes bucket) |
 | TTS | Secrets Manager read (ElevenLabs key) |
 | Post-Production | S3 read/write, ffmpeg layer attached |
 | Site | S3 read (for presigned URLs) |

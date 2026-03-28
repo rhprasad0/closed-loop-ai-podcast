@@ -629,18 +629,50 @@ Return ONLY the JSON object. No markdown fencing, no preamble, no explanation ou
 
 ### `lambdas/cover_art/prompts/cover_art.md`
 
-```markdown
-TODO: Cover art prompt template.
+This prompt template is sent to AWS Bedrock Nova Canvas (`amazon.nova-canvas-v1:0`) for image generation. Unlike the agent prompts above, this is not a system prompt for Claude — it is a text-to-image prompt with `{{variable}}` placeholders that the Cover Art handler substitutes before sending to Nova Canvas.
 
-Key content to include:
-- This is a template that gets filled in by the Cover Art Lambda based on episode content
-- Base elements always present:
-  - Three robot characters representing Hype, Roast, and Phil
-  - "0 STARS / 10/10" text/title
-  - Episode subtitle (repo name or theme)
-- Variable elements per episode:
-  - Visual reference to the featured project (e.g., if it's a terminal tool, show a terminal)
-  - Color scheme or mood matching the project's vibe
-- Style: vibrant, fun, podcast cover art aesthetic, bold colors
-- Nova Canvas constraints: text rendering is unreliable, keep text simple and large
+```markdown
+Bold cartoon podcast cover art, vibrant and energetic. Three robot characters in a studio: a bright enthusiastic robot with glowing eyes and raised arms, a monocled British robot with crossed arms and skeptical expression, a contemplative robot with a subtle head glow. They surround a microphone, reacting to a display showing {{visual_concept}}. Color palette: {{color_mood}}. Bold outlines, saturated colors, retro-futuristic aesthetic. Stylized illustration, no photorealism. Text: "0 STARS 10/10" in large bold block letters at top, "{{episode_subtitle}}" at bottom. All text must be extremely large and block-styled.
 ```
+
+**Nova Canvas `text` field limit: 1-1024 characters.** The base template is ~571 characters of fixed text, leaving ~453 characters for variable substitution. The handler must truncate the final prompt to 1024 characters if it exceeds the limit (truncation is preferable to an API error). The template is deliberately concise — Nova Canvas performs better with dense, descriptive prompts than with verbose instructions.
+
+**Variable mapping:**
+
+| Placeholder | Source | How it is built |
+|---|---|---|
+| `{{visual_concept}}` | `$.script.cover_art_suggestion` | Used verbatim. Falls back to `"an abstract visualization of a software project called {repo_name}"` if empty. |
+| `{{episode_subtitle}}` | `$.discovery.repo_name` | Used as-is. |
+| `{{color_mood}}` | `$.discovery.language` | Looked up in `LANGUAGE_COLOR_MOODS` dict. Falls back to `"vibrant blues, purples, and electric greens"` for unknown languages. |
+
+**Language-to-color-mood mapping** (handler constant, `LANGUAGE_COLOR_MOODS`):
+
+```python
+LANGUAGE_COLOR_MOODS: dict[str, str] = {
+    "Python": "warm yellows, blues, and greens inspired by the Python ecosystem",
+    "Rust": "deep oranges, warm reds, and metallic copper tones",
+    "Go": "cool cyan, teal, and clean white accents",
+    "JavaScript": "bright yellows, warm blacks, and neon highlights",
+    "TypeScript": "rich blues, white, and subtle purple accents",
+    "Ruby": "deep reds, crimson, and gemstone sparkle highlights",
+    "C": "steely grays, dark blues, and sharp neon green accents",
+    "C++": "similar to C but with warmer blue and subtle gold accents",
+    "Java": "warm orange-red, deep brown, and coffee-inspired tones",
+    "Shell": "terminal green on dark backgrounds with neon cyan accents",
+    "Lua": "deep navy blue, soft purple, and moonlight silver",
+    "Zig": "warm amber, bright orange, and golden lightning accents",
+    "Haskell": "rich purple, deep violet, and abstract geometric highlights",
+    "Elixir": "royal purple, deep magenta, and alchemical gold accents",
+    "Swift": "bright orange, gradient warm tones, and clean white",
+    "Kotlin": "gradient purple to orange, with modern clean accents",
+}
+DEFAULT_COLOR_MOOD: str = "vibrant blues, purples, and electric greens"
+```
+
+**Design notes:**
+
+- **Text rendering is best-effort.** Nova Canvas text rendering is unreliable. The prompt requests simple, large block-styled text to give Nova Canvas the best chance, but whatever it produces is accepted. No post-processing or text overlay is applied.
+- **No negative prompt.** Nova Canvas `TEXT_IMAGE` supports a `negativeText` parameter (1-1024 chars), but it is not used in v1. If generated images consistently show quality issues (photorealism, tiny text), a negative prompt can be added without changing the handler contract.
+- **No `style` parameter.** Nova Canvas supports a `style` parameter with 8 presets (`GRAPHIC_NOVEL_ILLUSTRATION`, `FLAT_VECTOR_ILLUSTRATION`, `3D_ANIMATED_FAMILY_FILM`, etc.). The prompt describes the visual style directly instead. A `style` parameter can be added if prompting alone does not produce consistent results.
+- **Three variables via `str.replace()`.** Python string substitution is sufficient for 3 placeholders. No Jinja2 or template engine needed. The `{{double-brace}}` syntax avoids collisions with literal braces.
+- **Prompt length safety.** The `text` field has a hard 1024-character limit. The handler must truncate the final prompt if substitution pushes it over. Truncation at 1024 chars is acceptable — Nova Canvas still generates a coherent image from a clipped prompt.

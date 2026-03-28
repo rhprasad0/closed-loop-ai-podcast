@@ -444,13 +444,64 @@ def sample_benchmark_scripts() -> list[tuple[str]]:
     ]
 ```
 
+@pytest.fixture
+def mock_nova_canvas_client():
+    """Patches _get_bedrock_client in the Cover Art handler.
+
+    Cover Art creates its own boto3 Bedrock client (not shared.bedrock),
+    so we patch the handler's cached client getter. The yielded mock is
+    the client object whose invoke_model method can be configured.
+
+    Usage:
+        def test_cover_art(mock_nova_canvas_client, ...):
+            mock_response = MagicMock()
+            mock_response.read.return_value = json.dumps({
+                "images": [base64.b64encode(PNG_BYTES).decode()]
+            }).encode()
+            mock_nova_canvas_client.invoke_model.return_value = {"body": mock_response}
+    """
+    with patch("lambdas.cover_art.handler._get_bedrock_client") as mock:
+        client = MagicMock()
+        mock.return_value = client
+        yield client
+
+
+@pytest.fixture
+def mock_s3_upload():
+    """Patches shared.s3.upload_bytes for Cover Art handler.
+
+    Usage:
+        def test_cover_art(mock_s3_upload, ...):
+            result = lambda_handler(event, context)
+            mock_s3_upload.assert_called_once_with(bucket, key, bytes, "image/png")
+    """
+    with patch("lambdas.cover_art.handler.upload_bytes") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_cover_art_prompt_template():
+    """Patches _load_prompt_template to return a known template string.
+
+    Uses a short template with all three placeholders for predictable assertions.
+    """
+    template = (
+        "Three robots reacting to {{visual_concept}}. "
+        "Colors: {{color_mood}}. Title: {{episode_subtitle}}."
+    )
+    with patch("lambdas.cover_art.handler._load_prompt_template", return_value=template):
+        yield template
+```
+
 ### Mocking Strategy
 
 | Dependency | Unit test approach | Integration test approach |
 |-----------|-------------------|-------------------------|
 | Bedrock (invoke_model) | `unittest.mock` — patch `boto3.client("bedrock-runtime")` return values. moto does not support Bedrock. | Real Bedrock calls with dev AWS credentials. |
 | Bedrock (invoke_with_tools) | `unittest.mock` — patch `invoke_with_tools` at the handler's import path (e.g., `lambdas.discovery.handler.invoke_with_tools`). | Real Bedrock calls (see E2E tests). |
+| Bedrock (Nova Canvas) | `unittest.mock` — patch `_get_bedrock_client` in `lambdas.cover_art.handler`. Mock `invoke_model` to return a response with base64-encoded PNG bytes. | Real Bedrock calls (costs money — skip by default, see integration test). |
 | S3 | `moto` `@mock_aws` decorator — creates in-memory S3. | Real S3 bucket in dev account with `test/` key prefix. |
+| S3 (Cover Art upload) | `unittest.mock` — patch `upload_bytes` at `lambdas.cover_art.handler.upload_bytes`. | Real S3 bucket (tested transitively via E2E). |
 | Postgres (shared/db.py) | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
 | Postgres (Discovery/psql) | `unittest.mock` — patch `subprocess.run` in `lambdas.discovery.handler`. | Real psql against dev RDS (see Discovery integration tests). |
 | Postgres (Producer/shared.db) | `unittest.mock` — patch `shared.db.query` at `lambdas.producer.handler.query`. | Real dev RDS instance (see `test_producer_db_benchmark_query` integration test). |
@@ -2122,6 +2173,359 @@ def test_handler_propagates_runtime_error_from_invoke_model(
             )
 ```
 
+### Cover Art Unit Tests
+
+Tests for the Cover Art handler (`tests/unit/test_cover_art.py`). The Cover Art handler is the simplest pipeline handler — no agent loop, no tool dispatch, no parsing of model-generated JSON. It builds a prompt from a template, calls Nova Canvas for image generation, uploads the PNG to S3, and returns the S3 key. The test structure has three sections: prompt construction, image generation, and full handler tests.
+
+#### Prompt Construction Tests
+
+```python
+import json
+
+import pytest
+
+from lambdas.cover_art.handler import (
+    _build_cover_art_prompt,
+    DEFAULT_COLOR_MOOD,
+    LANGUAGE_COLOR_MOODS,
+)
+
+
+def test_build_prompt_substitutes_visual_concept(mock_cover_art_prompt_template):
+    result = _build_cover_art_prompt(
+        cover_art_suggestion="a terminal window with pasta names scrolling",
+        repo_name="pasta-sorter",
+        language="Python",
+    )
+    assert "a terminal window with pasta names scrolling" in result
+
+
+def test_build_prompt_substitutes_repo_name(mock_cover_art_prompt_template):
+    result = _build_cover_art_prompt(
+        cover_art_suggestion="robots coding",
+        repo_name="pasta-sorter",
+        language="Python",
+    )
+    assert "pasta-sorter" in result
+
+
+def test_build_prompt_maps_python_to_color_mood(mock_cover_art_prompt_template):
+    result = _build_cover_art_prompt(
+        cover_art_suggestion="robots coding",
+        repo_name="testrepo",
+        language="Python",
+    )
+    assert "warm yellows" in result
+
+
+def test_build_prompt_maps_rust_to_color_mood(mock_cover_art_prompt_template):
+    result = _build_cover_art_prompt(
+        cover_art_suggestion="robots coding",
+        repo_name="testrepo",
+        language="Rust",
+    )
+    assert "deep oranges" in result
+
+
+def test_build_prompt_unknown_language_uses_default(mock_cover_art_prompt_template):
+    result = _build_cover_art_prompt(
+        cover_art_suggestion="robots coding",
+        repo_name="testrepo",
+        language="Brainfuck",
+    )
+    assert DEFAULT_COLOR_MOOD in result
+
+
+def test_build_prompt_empty_suggestion_uses_fallback(mock_cover_art_prompt_template):
+    result = _build_cover_art_prompt(
+        cover_art_suggestion="",
+        repo_name="testrepo",
+        language="Python",
+    )
+    assert "testrepo" in result
+    # Should not contain empty string substitution — fallback kicks in
+    assert "abstract visualization" in result or "testrepo" in result
+
+
+def test_build_prompt_truncates_to_1024_chars(mock_cover_art_prompt_template):
+    # Force a prompt that would exceed 1024 chars after substitution
+    long_suggestion = "x" * 900  # way longer than template can accommodate
+    result = _build_cover_art_prompt(
+        cover_art_suggestion=long_suggestion,
+        repo_name="testrepo",
+        language="Python",
+    )
+    assert len(result) <= 1024
+```
+
+#### Image Generation Tests
+
+```python
+import base64
+import json
+from io import BytesIO
+from unittest.mock import MagicMock, patch
+
+import pytest
+from botocore.exceptions import ClientError
+
+from lambdas.cover_art.handler import _generate_image, PNG_MAGIC_BYTES
+
+# Minimal valid PNG: magic bytes + minimal IHDR chunk (enough to pass magic byte check)
+MINIMAL_PNG = (
+    b"\x89PNG\r\n\x1a\n"  # PNG signature
+    b"\x00\x00\x00\rIHDR"  # IHDR chunk
+    b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"  # 1x1, 8-bit RGB
+    b"\x00\x00\x00\x90wS\xde"  # CRC
+)
+
+
+def _mock_nova_canvas_response(image_bytes: bytes) -> MagicMock:
+    """Build a mock Bedrock invoke_model response with base64-encoded image."""
+    body_content = json.dumps({
+        "images": [base64.b64encode(image_bytes).decode()]
+    }).encode()
+    mock_body = MagicMock()
+    mock_body.read.return_value = body_content
+    return {"body": mock_body}
+
+
+def test_generate_image_returns_png_bytes(mock_nova_canvas_client):
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(MINIMAL_PNG)
+    result = _generate_image("test prompt")
+    assert result[:4] == PNG_MAGIC_BYTES
+    assert result == MINIMAL_PNG
+
+
+def test_generate_image_sends_correct_request_body(mock_nova_canvas_client):
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(MINIMAL_PNG)
+    _generate_image("test prompt")
+    call_args = mock_nova_canvas_client.invoke_model.call_args
+    assert call_args.kwargs["modelId"] == "amazon.nova-canvas-v1:0"
+    assert call_args.kwargs["contentType"] == "application/json"
+    body = json.loads(call_args.kwargs["body"])
+    assert body["taskType"] == "TEXT_IMAGE"
+    assert body["textToImageParams"]["text"] == "test prompt"
+    assert body["imageGenerationConfig"]["width"] == 1024
+    assert body["imageGenerationConfig"]["height"] == 1024
+    assert body["imageGenerationConfig"]["quality"] == "standard"
+    assert body["imageGenerationConfig"]["numberOfImages"] == 1
+
+
+def test_generate_image_raises_on_content_policy_violation(mock_nova_canvas_client):
+    mock_nova_canvas_client.invoke_model.side_effect = ClientError(
+        {"Error": {"Code": "ValidationException", "Message": "Content policy violation"}},
+        "InvokeModel",
+    )
+    with pytest.raises(RuntimeError, match="content policy"):
+        _generate_image("offensive prompt")
+
+
+def test_generate_image_raises_on_empty_images_array(mock_nova_canvas_client):
+    body_content = json.dumps({"images": []}).encode()
+    mock_body = MagicMock()
+    mock_body.read.return_value = body_content
+    mock_nova_canvas_client.invoke_model.return_value = {"body": mock_body}
+    with pytest.raises(RuntimeError, match="no images"):
+        _generate_image("test prompt")
+
+
+def test_generate_image_raises_on_throttling(mock_nova_canvas_client):
+    mock_nova_canvas_client.invoke_model.side_effect = ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"}},
+        "InvokeModel",
+    )
+    with pytest.raises(ClientError):
+        _generate_image("test prompt")
+
+
+def test_generate_image_raises_on_rai_error(mock_nova_canvas_client):
+    """Nova Canvas returns an error field when RAI flags the generated image."""
+    body_content = json.dumps({
+        "images": [],
+        "error": "The generated image has been blocked by our content filter."
+    }).encode()
+    mock_body = MagicMock()
+    mock_body.read.return_value = body_content
+    mock_nova_canvas_client.invoke_model.return_value = {"body": mock_body}
+    with pytest.raises(RuntimeError, match="RAI"):
+        _generate_image("test prompt")
+```
+
+#### Full Handler Tests
+
+```python
+import base64
+import json
+import os
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from lambdas.cover_art.handler import PNG_MAGIC_BYTES
+
+# Reuse MINIMAL_PNG and _mock_nova_canvas_response from Image Generation Tests above.
+# In the actual test file, these would be module-level constants.
+
+MINIMAL_PNG = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR"
+    b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
+    b"\x00\x00\x00\x90wS\xde"
+)
+
+
+def _mock_nova_canvas_response(image_bytes: bytes) -> MagicMock:
+    body_content = json.dumps({
+        "images": [base64.b64encode(image_bytes).decode()]
+    }).encode()
+    mock_body = MagicMock()
+    mock_body.read.return_value = body_content
+    return {"body": mock_body}
+
+
+def test_handler_returns_valid_cover_art_output(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output, sample_script_output,
+):
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(MINIMAL_PNG)
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    assert "s3_key" in result
+    assert "prompt_used" in result
+
+
+def test_handler_s3_key_contains_execution_id(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output, sample_script_output,
+):
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(MINIMAL_PNG)
+    execution_id = pipeline_metadata["execution_id"]
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    assert result["s3_key"] == f"episodes/{execution_id}/cover.png"
+
+
+def test_handler_uploads_png_to_s3(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output, sample_script_output,
+):
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(MINIMAL_PNG)
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    mock_s3_upload.assert_called_once()
+    call_args = mock_s3_upload.call_args
+    assert call_args[0][0] == "test-bucket"  # bucket
+    assert call_args[0][1].endswith("/cover.png")  # key
+    assert call_args[0][2] == MINIMAL_PNG  # bytes
+    assert call_args[0][3] == "image/png"  # content_type
+
+
+def test_handler_prompt_used_matches_constructed_prompt(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output, sample_script_output,
+):
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(MINIMAL_PNG)
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    # prompt_used should contain the substituted values from the template
+    assert sample_discovery_output["repo_name"] in result["prompt_used"]
+
+
+def test_handler_validates_png_magic_bytes(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output, sample_script_output,
+):
+    # Return non-PNG bytes (e.g., JPEG magic bytes)
+    jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    mock_nova_canvas_client.invoke_model.return_value = _mock_nova_canvas_response(jpeg_bytes)
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        with pytest.raises(RuntimeError, match="invalid PNG"):
+            lambda_handler(
+                {
+                    "metadata": pipeline_metadata,
+                    "discovery": sample_discovery_output,
+                    "script": sample_script_output,
+                },
+                lambda_context,
+            )
+
+
+def test_handler_raises_on_missing_script_data(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output,
+):
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        with pytest.raises(KeyError):
+            lambda_handler(
+                {
+                    "metadata": pipeline_metadata,
+                    "discovery": sample_discovery_output,
+                    # missing "script" key
+                },
+                lambda_context,
+            )
+
+
+def test_handler_propagates_bedrock_runtime_error(
+    pipeline_metadata, lambda_context, mock_nova_canvas_client,
+    mock_s3_upload, mock_cover_art_prompt_template,
+    sample_discovery_output, sample_script_output,
+):
+    mock_nova_canvas_client.invoke_model.side_effect = RuntimeError("Nova Canvas error")
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.cover_art.handler import lambda_handler
+        with pytest.raises(RuntimeError, match="Nova Canvas"):
+            lambda_handler(
+                {
+                    "metadata": pipeline_metadata,
+                    "discovery": sample_discovery_output,
+                    "script": sample_script_output,
+                },
+                lambda_context,
+            )
+```
+
 ### Integration Test Pattern
 
 Integration tests hit real AWS services and external APIs. They are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
@@ -2373,6 +2777,49 @@ def test_producer_db_benchmark_query():
 ```
 
 **Resource isolation:** Integration tests must use unique prefixes for S3 keys and DB test data (e.g., the GitHub Actions run ID or commit SHA) to prevent conflicts when multiple CI runs execute in parallel. Clean up test resources in a `finally` block or pytest `teardown` fixture.
+
+#### Cover Art Integration Test (`tests/integration/test_bedrock_live.py` — add to existing file)
+
+This verifies that Nova Canvas image generation works with real AWS credentials. The test sends a simple prompt and validates the response shape and PNG output. Skipped by default because each invocation costs money (Bedrock image generation pricing).
+
+```python
+import base64
+import json
+
+import boto3
+import pytest
+
+
+@pytest.mark.integration
+@pytest.mark.skip(reason="Costs money (Bedrock Nova Canvas). Run manually.")
+def test_nova_canvas_generates_image():
+    """Verify Nova Canvas image generation works with real credentials."""
+    client = boto3.client("bedrock-runtime")
+    response = client.invoke_model(
+        modelId="amazon.nova-canvas-v1:0",
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps({
+            "taskType": "TEXT_IMAGE",
+            "textToImageParams": {
+                "text": "Three colorful robots in a podcast studio, cartoon style, bold outlines",
+            },
+            "imageGenerationConfig": {
+                "numberOfImages": 1,
+                "width": 1024,
+                "height": 1024,
+                "quality": "standard",
+            },
+        }),
+    )
+    result = json.loads(response["body"].read())
+    assert "images" in result
+    assert len(result["images"]) >= 1
+
+    image_bytes = base64.b64decode(result["images"][0])
+    assert image_bytes[:4] == b"\x89PNG", "Expected PNG magic bytes"
+    assert len(image_bytes) > 10_000, "1024x1024 PNG should be >10KB"
+```
 
 ### End-to-End Tests
 
@@ -2795,6 +3242,113 @@ def test_producer_e2e_produces_valid_output():
             assert len(issue) > 0, "each issue must be a non-empty string"
 ```
 
+#### Cover Art E2E Test (`tests/e2e/test_cover_art_e2e.py`)
+
+```python
+import base64
+import json
+import os
+
+import boto3
+import pytest
+
+
+@pytest.mark.e2e
+@pytest.mark.skip(
+    reason="E2E: costs money (Bedrock Nova Canvas + S3). Run manually: "
+    "pytest tests/e2e/test_cover_art_e2e.py -v -m e2e --override-ini='addopts='"
+)
+def test_cover_art_e2e_produces_valid_output():
+    """Invoke Cover Art handler with real Bedrock Nova Canvas and real S3.
+
+    Verifies:
+    1. Output is valid CoverArtOutput with s3_key and prompt_used
+    2. s3_key follows episodes/{execution_id}/cover.png pattern
+    3. prompt_used is a non-empty string containing the repo name
+    4. The PNG was actually uploaded to S3 (download and check magic bytes)
+    """
+    from unittest.mock import MagicMock
+
+    # Set LAMBDA_TASK_ROOT so the handler can find prompts/cover_art.md
+    os.environ.setdefault(
+        "LAMBDA_TASK_ROOT",
+        os.path.join(os.path.dirname(__file__), "..", "..", "lambdas", "cover_art"),
+    )
+
+    from lambdas.cover_art.handler import lambda_handler
+
+    execution_id = "e2e-cover-art-test"
+    event = {
+        "metadata": {
+            "execution_id": execution_id,
+            "script_attempt": 1,
+        },
+        "discovery": {
+            "repo_url": "https://github.com/torvalds/linux",
+            "repo_name": "linux",
+            "repo_description": "Linux kernel source tree",
+            "developer_github": "torvalds",
+            "star_count": 0,
+            "language": "C",
+            "discovery_rationale": "E2E test input",
+            "key_files": ["README"],
+            "technical_highlights": ["Monolithic kernel with loadable module support"],
+        },
+        "script": {
+            "text": "**Hype:** Welcome! **Roast:** Here we go. **Phil:** But what is a kernel?",
+            "character_count": 71,
+            "segments": [
+                "intro", "core_debate", "developer_deep_dive",
+                "technical_appreciation", "hiring_manager", "outro",
+            ],
+            "featured_repo": "linux",
+            "featured_developer": "torvalds",
+            "cover_art_suggestion": (
+                "A penguin mascot surrounded by terminal windows displaying kernel code, "
+                "with three robot silhouettes in a podcast studio"
+            ),
+        },
+    }
+    context = MagicMock()
+    context.function_name = "e2e-test-cover-art"
+
+    s3_client = boto3.client("s3")
+    bucket = os.environ["S3_BUCKET"]
+
+    try:
+        result = lambda_handler(event, context)
+
+        # Validate output shape
+        assert "s3_key" in result, "Missing required field: s3_key"
+        assert "prompt_used" in result, "Missing required field: prompt_used"
+
+        # Validate s3_key pattern
+        assert result["s3_key"] == f"episodes/{execution_id}/cover.png", (
+            f"Unexpected s3_key: {result['s3_key']}"
+        )
+
+        # Validate prompt_used contains repo name
+        assert isinstance(result["prompt_used"], str)
+        assert len(result["prompt_used"]) > 0, "prompt_used must be non-empty"
+        assert "linux" in result["prompt_used"], "prompt_used should contain repo name"
+
+        # Verify the PNG was actually uploaded to S3
+        s3_response = s3_client.get_object(Bucket=bucket, Key=result["s3_key"])
+        image_bytes = s3_response["Body"].read()
+        assert image_bytes[:4] == b"\x89PNG", "Uploaded file should be a valid PNG"
+        assert len(image_bytes) > 10_000, "1024x1024 PNG should be >10KB"
+
+    finally:
+        # Clean up: delete the test S3 object
+        try:
+            s3_client.delete_object(
+                Bucket=bucket,
+                Key=f"episodes/{execution_id}/cover.png",
+            )
+        except Exception:
+            pass  # Best-effort cleanup
+```
+
 ### Per-Handler Test Requirements
 
 Each handler's unit test file must verify:
@@ -2805,7 +3359,7 @@ Each handler's unit test file must verify:
 | Research | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); string `public_repos_count` coerced to int; null `developer_bio` coerced to empty string; missing required field rejected; invalid JSON rejected; `notable_repos` entry missing required sub-field rejected; empty `notable_repos` accepted. **`get_github_user` tool:** curated fields returned (login, name, bio, public_repos, followers, created_at, html_url — no extra fields like id, avatar_url); null name handled; null bio handled; HTTP error returns error dict; socket timeout returns error dict. **`get_user_repos` tool:** returns array of curated repo objects (name, description, stargazers_count, language, html_url, pushed_at, fork — no extra fields); HTTP error returns error dict. **`get_repo_details` tool:** curated fields returned (name, full_name, description, stargazers_count, forks_count, language, topics, created_at, updated_at, html_url — no extra fields); null description handled; HTTP error returns error dict. **`get_repo_readme` tool:** returns decoded content string (base64 decoded by tool); 404 (no README) returns error dict; HTTP error returns error dict. **`search_repositories` tool:** returns `total_count` and curated items array; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each of 5 tool names; unknown tool returns error dict. **Full handler:** returns valid ResearchOutput; passes 5 tools and executor to invoke_with_tools; reads `$.discovery.developer_github`, `$.discovery.repo_name`, and `$.discovery.repo_url` from input event; handles missing developer bio (null → empty string); handles user with zero repos (empty `notable_repos` valid); handles fenced output from agent; propagates RuntimeError from invoke_with_tools. |
 | Script | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); `character_count` >= 5,000 rejected; string `character_count` coerced to int; inaccurate `character_count` overwritten with `len(text)`; missing required field rejected; invalid JSON rejected; wrong segments rejected; segments in wrong order rejected; text at 4,999 characters accepted; text at 5,000 characters rejected. **User message building:** includes discovery data (repo_name, language, technical_highlights); includes research data (developer_name, hiring_signals, interesting_findings); includes attempt number; omits producer feedback on first attempt; includes producer feedback and issues on retry (`script_attempt > 1`). **Full handler:** returns valid ScriptOutput; calls `invoke_model` (not `invoke_with_tools`) with no tools or tool_executor; user message contains discovery data; user message contains research data; first attempt has no feedback in message; retry includes producer feedback and all issues; handles fenced output from agent; raises ValueError on character count exceeded; raises ValueError/JSONDecodeError on invalid JSON from model; propagates RuntimeError from invoke_model. |
 | Producer | **Output parsing:** valid PASS JSON; valid FAIL JSON; fenced JSON (` ```json ` and ` ``` `); missing `verdict` rejected; missing `score` rejected; invalid `verdict` value (not "PASS" or "FAIL") rejected; FAIL missing `feedback` rejected; FAIL missing `issues` rejected; PASS with `notes` accepted; PASS without `notes` accepted; string `score` coerced to int; invalid JSON rejected. **User message building:** includes script text; includes character count; includes discovery `repo_name`; includes discovery `repo_description`; includes research `hiring_signals`; includes benchmark scripts when available; handles no benchmark scripts gracefully (no crash, no misleading benchmark section). **Full handler:** returns valid PASS ProducerOutput; returns valid FAIL ProducerOutput; calls `invoke_model` (not `invoke_with_tools`) with no tools or tool_executor; reads script, discovery, and research data from event and passes them in user message; queries database for benchmark scripts via `shared.db.query`; handles fenced output from agent; handles empty benchmark results (no episodes in DB); propagates RuntimeError from invoke_model. |
-| Cover Art | Output matches `CoverArtOutput` shape; S3 key follows `episodes/{execution_id}/cover.png` pattern |
+| Cover Art | **Prompt construction:** `visual_concept` substituted from `cover_art_suggestion`; `repo_name` substituted as `episode_subtitle`; known language (Python, Rust, etc.) maps to specific color mood; unknown language uses `DEFAULT_COLOR_MOOD`; empty `cover_art_suggestion` uses fallback description containing repo name; final prompt truncated to 1024 chars (Nova Canvas hard limit). **Image generation:** returns PNG bytes from valid base64 response; sends correct `modelId` (`amazon.nova-canvas-v1:0`), `taskType` (`TEXT_IMAGE`), `width` (1024), `height` (1024), `quality` (`standard`) in request body; raises `RuntimeError` on content policy violation (`ClientError`/`ValidationException`); raises `RuntimeError` on empty `images` array; raises `RuntimeError` on RAI `error` field in response; propagates `ThrottlingException` (not caught — Step Functions handles retry). **Full handler:** returns valid `CoverArtOutput` with `s3_key` and `prompt_used`; `s3_key` is `episodes/{execution_id}/cover.png`; calls `upload_bytes` with correct bucket, key, PNG bytes, `content_type="image/png"`; `prompt_used` matches the prompt sent to Nova Canvas; validates PNG magic bytes (`b"\x89PNG"` — non-PNG raises `RuntimeError`); raises `KeyError` on missing `$.script` in event; propagates `RuntimeError` from `_generate_image`. |
 | TTS | Output matches `TTSOutput` shape; correctly parses `**Hype:**`, `**Roast:**`, `**Phil:**` labels; raises exception on malformed script lines |
 | Post-Production | Output matches `PostProductionOutput` shape; writes to `episodes` table; writes to `featured_developers` table |
 | Site | Returns valid HTML with status 200; handles empty episodes table |

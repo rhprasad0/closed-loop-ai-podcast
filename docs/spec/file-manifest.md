@@ -160,6 +160,7 @@ Every file below must be created. No other files should be created.
 | `tests/integration/test_s3_live.py` | Integration tests hitting real S3. Marked `@pytest.mark.integration`. |
 | `tests/integration/test_discovery_live.py` | Integration tests for Discovery external deps (psql, SSM, GitHub API). Marked `@pytest.mark.integration`. |
 | `tests/integration/test_discovery_e2e.py` | End-to-end test: invokes Discovery handler with real Bedrock, Exa, psql, GitHub. Marked `@pytest.mark.integration`, skipped by default. |
+| `tests/e2e/test_cover_art_e2e.py` | End-to-end test: invokes Cover Art handler with real Bedrock Nova Canvas and S3. Marked `@pytest.mark.e2e`, skipped by default. |
 | `tests/integration/test_db_live.py` | Integration tests hitting real Postgres. Marked `@pytest.mark.integration`. |
 
 ### Other Files

@@ -433,6 +433,120 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> ProducerOutp
 - `BENCHMARK_QUERY` is typed as `str` (module-level constant). The engagement score formula weights metrics: views(1x) + likes(2x) + comments(3x) + shares(5x), reflecting the relative value of each engagement type.
 - No module-level credential caching is needed — the shared `db` module handles connection management, and `DB_CONNECTION_STRING` is an environment variable (not fetched from SSM at runtime like Discovery's connection string).
 
+### Cover Art Handler Internal Function Signatures
+
+The Cover Art handler (`lambdas/cover_art/handler.py`) is the simplest pipeline handler — no agent loop, no tool dispatch, no output parsing of model-generated JSON. It builds a prompt from a template, calls Nova Canvas for image generation, uploads the PNG to S3, and returns the S3 key. The handler creates its own `boto3.client("bedrock-runtime")` because Nova Canvas uses a completely different request body format than the Claude Messages API in `shared/bedrock.py`.
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+from typing import Any
+
+import boto3
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.logging import get_logger
+from shared.s3 import upload_bytes
+from shared.types import CoverArtOutput, PipelineState
+
+logger = get_logger("cover_art")
+
+# --- Module-level constants ---
+
+NOVA_CANVAS_MODEL_ID: str = "amazon.nova-canvas-v1:0"
+IMAGE_WIDTH: int = 1024
+IMAGE_HEIGHT: int = 1024
+IMAGE_QUALITY: str = "standard"
+MAX_PROMPT_LENGTH: int = 1024  # Nova Canvas text field hard limit
+PNG_MAGIC_BYTES: bytes = b"\x89PNG"
+BEDROCK_READ_TIMEOUT: int = 300  # AWS recommends >= 300s for image generation
+
+LANGUAGE_COLOR_MOODS: dict[str, str] = {
+    "Python": "warm yellows, blues, and greens inspired by the Python ecosystem",
+    "Rust": "deep oranges, warm reds, and metallic copper tones",
+    "Go": "cool cyan, teal, and clean white accents",
+    "JavaScript": "bright yellows, warm blacks, and neon highlights",
+    "TypeScript": "rich blues, white, and subtle purple accents",
+    "Ruby": "deep reds, crimson, and gemstone sparkle highlights",
+    "C": "steely grays, dark blues, and sharp neon green accents",
+    "C++": "similar to C but with warmer blue and subtle gold accents",
+    "Java": "warm orange-red, deep brown, and coffee-inspired tones",
+    "Shell": "terminal green on dark backgrounds with neon cyan accents",
+    "Lua": "deep navy blue, soft purple, and moonlight silver",
+    "Zig": "warm amber, bright orange, and golden lightning accents",
+    "Haskell": "rich purple, deep violet, and abstract geometric highlights",
+    "Elixir": "royal purple, deep magenta, and alchemical gold accents",
+    "Swift": "bright orange, gradient warm tones, and clean white",
+    "Kotlin": "gradient purple to orange, with modern clean accents",
+}
+DEFAULT_COLOR_MOOD: str = "vibrant blues, purples, and electric greens"
+
+# --- Module-level cached client ---
+
+_bedrock_client: Any | None = None
+
+
+def _get_bedrock_client() -> Any:
+    """Return a Bedrock Runtime boto3 client, cached across warm starts.
+
+    Configures read_timeout=300s (AWS recommends this for image generation;
+    the boto3 default of 60s is too short for Nova Canvas).
+    """
+    ...
+
+
+def _load_prompt_template() -> str:
+    """Read prompts/cover_art.md from disk.
+
+    Uses LAMBDA_TASK_ROOT (set by AWS Lambda runtime) to locate the prompt file,
+    falling back to the handler's directory for local testing.
+    """
+    ...
+
+
+def _build_cover_art_prompt(
+    cover_art_suggestion: str,
+    repo_name: str,
+    language: str,
+) -> str:
+    """Substitute {{visual_concept}}, {{episode_subtitle}}, {{color_mood}} into template.
+
+    Falls back to a generic description if cover_art_suggestion is empty.
+    Falls back to DEFAULT_COLOR_MOOD if language is not in LANGUAGE_COLOR_MOODS.
+    Truncates final prompt to MAX_PROMPT_LENGTH (1024 chars) if needed.
+    """
+    ...
+
+
+def _generate_image(prompt: str) -> bytes:
+    """Call Nova Canvas TEXT_IMAGE and return decoded PNG bytes.
+
+    Raises RuntimeError on content policy violation (ValidationException),
+    empty images array, or RAI-flagged response (error field in response body).
+    Lets ThrottlingException propagate for Step Functions retry.
+    """
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> CoverArtOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- **Own `boto3` import** — Cover Art creates its own `boto3.client("bedrock-runtime")` rather than using `shared.bedrock.invoke_model()`. Nova Canvas uses a `TEXT_IMAGE` request body with `textToImageParams` and `imageGenerationConfig`, which has zero overlap with the Claude Messages API body. A shared wrapper would serve exactly one consumer.
+- **`read_timeout` configuration** — `_get_bedrock_client` creates the client with `botocore.config.Config(read_timeout=300)`. The boto3 default `read_timeout` is 60 seconds, which AWS documentation explicitly warns is too short for Nova Canvas image generation. 300 seconds matches the Lambda timeout.
+- `_bedrock_client` is cached at module level (`Any | None`) using the same pattern as Discovery's credential caching. `Any` is necessary because `boto3-stubs` types the client as `BedrockRuntimeClient`, but the module-level cache starts as `None`.
+- `_build_cover_art_prompt` uses three `str.replace()` calls — no template engine needed for 3 variables. Returns `str`. **Truncates the final prompt to 1024 characters** (Nova Canvas hard limit on the `text` field). The template is ~571 chars of fixed text, leaving ~453 chars for variable substitution, so truncation should rarely trigger in practice.
+- `_generate_image` returns `bytes` (raw PNG data after base64 decode). It checks for the `error` field in the Nova Canvas response (set when AWS Responsible AI policy flags the image). It catches `botocore.exceptions.ClientError` for `ValidationException` (content policy violation) and re-raises as `RuntimeError`. `ThrottlingException` is not caught — Step Functions handles retries.
+- `_load_prompt_template` uses `os.environ.get("LAMBDA_TASK_ROOT", os.path.dirname(__file__))` — identical pattern to Discovery, Research, Script, and Producer.
+- The handler validates PNG magic bytes (`b"\x89PNG"`) after decoding. This is a lightweight sanity check, not full image validation.
+- No `_parse_*_output` function — unlike the agent handlers, Cover Art does not parse model-generated JSON. The output is constructed programmatically from the S3 key and prompt string.
+
 ### Typing Conventions
 
 - Every function in shared modules (`bedrock.py`, `db.py`, `s3.py`, `logging.py`) must have full type annotations — parameters and return types.
