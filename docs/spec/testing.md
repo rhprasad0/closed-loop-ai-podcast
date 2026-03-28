@@ -41,6 +41,7 @@ tests/
 │   ├── test_bedrock_live.py
 │   ├── test_s3_live.py
 │   ├── test_db_live.py
+│   ├── test_packaging.py
 │   ├── test_mcp_pipeline_live.py
 │   ├── test_mcp_data_live.py
 │   ├── test_mcp_assets_live.py
@@ -2821,6 +2822,243 @@ def test_nova_canvas_generates_image():
     assert len(image_bytes) > 10_000, "1024x1024 PNG should be >10KB"
 ```
 
+#### Packaging Integration Tests (`tests/integration/test_packaging.py`)
+
+These tests validate that build scripts produce correct Lambda deployment artifacts. They require build artifacts to exist — run all build scripts before running these tests. No AWS credentials needed.
+
+See [Packaging & Deployment](./packaging-and-deployment.md) for the build scripts and expected layer structures.
+
+```python
+import os
+import zipfile
+
+import pytest
+
+
+REPO_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+
+
+@pytest.mark.integration
+class TestSharedLayerPackaging:
+    """Validates the shared layer zip built by lambdas/shared/build.sh."""
+
+    ZIP_PATH = os.path.join(REPO_ROOT, "build", "shared-layer.zip")
+
+    def test_shared_layer_zip_exists(self):
+        assert os.path.isfile(self.ZIP_PATH), (
+            f"Shared layer zip not found at {self.ZIP_PATH}. "
+            "Run lambdas/shared/build.sh first."
+        )
+
+    def test_shared_layer_contains_shared_modules(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            names = zf.namelist()
+            for module in [
+                "__init__.py", "bedrock.py", "db.py", "s3.py", "logging.py", "types.py",
+            ]:
+                assert f"python/shared/{module}" in names, f"Missing python/shared/{module}"
+
+    def test_shared_layer_contains_psycopg2(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            psycopg2_files = [n for n in zf.namelist() if n.startswith("python/psycopg2/")]
+            assert len(psycopg2_files) > 0, "psycopg2 package not found in shared layer"
+
+    def test_shared_layer_contains_powertools(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            powertools_files = [
+                n for n in zf.namelist() if n.startswith("python/aws_lambda_powertools/")
+            ]
+            assert len(powertools_files) > 0, "aws_lambda_powertools not found in shared layer"
+
+    def test_shared_layer_all_entries_under_python_dir(self):
+        """All entries must be under python/ — Lambda expects this structure."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            for name in zf.namelist():
+                assert name.startswith("python/"), (
+                    f"Unexpected path outside python/: {name}"
+                )
+
+    def test_shared_layer_no_dist_info_at_wrong_level(self):
+        """*.dist-info dirs must be under python/, not nested deeper."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            for name in zf.namelist():
+                if ".dist-info" in name:
+                    parts = name.split("/")
+                    assert parts[0] == "python", (
+                        f"dist-info at wrong level: {name}"
+                    )
+
+    def test_shared_layer_unzipped_size_under_50mb(self):
+        """Shared layer alone should stay well under 50 MB unzipped."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+        max_bytes = 50 * 1024 * 1024
+        assert total < max_bytes, (
+            f"Shared layer unzipped size {total / 1024 / 1024:.1f} MB exceeds 50 MB"
+        )
+
+
+@pytest.mark.integration
+class TestFfmpegLayerPackaging:
+    """Validates the ffmpeg layer zip built by layers/ffmpeg/build.sh."""
+
+    ZIP_PATH = os.path.join(REPO_ROOT, "layers", "ffmpeg", "ffmpeg-layer.zip")
+
+    def test_ffmpeg_layer_zip_exists(self):
+        assert os.path.isfile(self.ZIP_PATH), (
+            f"ffmpeg layer zip not found at {self.ZIP_PATH}. "
+            "Run layers/ffmpeg/build.sh first."
+        )
+
+    def test_ffmpeg_layer_contains_binary(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            assert "bin/ffmpeg" in zf.namelist(), "bin/ffmpeg not found in ffmpeg layer"
+
+    def test_ffmpeg_binary_is_executable(self):
+        """The ffmpeg binary must have the executable bit set in the zip."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            info = zf.getinfo("bin/ffmpeg")
+            # Unix permissions are stored in external_attr >> 16
+            unix_mode = info.external_attr >> 16
+            assert unix_mode & 0o111, "bin/ffmpeg is not marked executable in zip"
+
+    def test_ffmpeg_binary_is_elf_x86_64(self):
+        """The ffmpeg binary must be a Linux x86_64 ELF executable."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            with zf.open("bin/ffmpeg") as f:
+                magic = f.read(20)
+        # ELF magic: \x7fELF
+        assert magic[:4] == b"\x7fELF", "bin/ffmpeg is not an ELF binary"
+        # ELF class: 2 = 64-bit
+        assert magic[4] == 2, "bin/ffmpeg is not a 64-bit binary"
+        # ELF machine: bytes 18-19, little-endian. 0x3E = x86_64
+        machine = int.from_bytes(magic[18:20], "little")
+        assert machine == 0x3E, f"bin/ffmpeg architecture is {machine:#x}, expected 0x3e (x86_64)"
+
+    def test_ffmpeg_layer_only_contains_bin_dir(self):
+        """ffmpeg layer should only contain bin/ directory."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            top_dirs = {n.split("/")[0] for n in zf.namelist() if "/" in n}
+            assert top_dirs == {"bin"}, f"Unexpected top-level dirs: {top_dirs}"
+
+    def test_ffmpeg_layer_unzipped_size_under_100mb(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+        max_bytes = 100 * 1024 * 1024
+        assert total < max_bytes, (
+            f"ffmpeg layer unzipped size {total / 1024 / 1024:.1f} MB exceeds 100 MB"
+        )
+
+
+@pytest.mark.integration
+class TestPsqlLayerPackaging:
+    """Validates the psql layer zip built by layers/psql/build.sh."""
+
+    ZIP_PATH = os.path.join(REPO_ROOT, "layers", "psql", "psql-layer.zip")
+
+    def test_psql_layer_zip_exists(self):
+        assert os.path.isfile(self.ZIP_PATH), (
+            f"psql layer zip not found at {self.ZIP_PATH}. "
+            "Run layers/psql/build.sh first."
+        )
+
+    def test_psql_layer_contains_binary(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            assert "bin/psql" in zf.namelist(), "bin/psql not found in psql layer"
+
+    def test_psql_layer_contains_libpq(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            libpq_files = [n for n in zf.namelist() if n.startswith("lib/libpq.so")]
+            assert len(libpq_files) > 0, "lib/libpq.so* not found in psql layer"
+
+    def test_psql_binary_is_executable(self):
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            info = zf.getinfo("bin/psql")
+            unix_mode = info.external_attr >> 16
+            assert unix_mode & 0o111, "bin/psql is not marked executable in zip"
+
+    def test_psql_binary_is_elf_x86_64(self):
+        """The psql binary must be a Linux x86_64 ELF executable."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            with zf.open("bin/psql") as f:
+                magic = f.read(20)
+        assert magic[:4] == b"\x7fELF", "bin/psql is not an ELF binary"
+        assert magic[4] == 2, "bin/psql is not a 64-bit binary"
+        machine = int.from_bytes(magic[18:20], "little")
+        assert machine == 0x3E, f"bin/psql architecture is {machine:#x}, expected 0x3e (x86_64)"
+
+    def test_psql_layer_only_contains_bin_and_lib(self):
+        """psql layer should only contain bin/ and lib/ directories."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            top_dirs = {n.split("/")[0] for n in zf.namelist() if "/" in n}
+            assert top_dirs == {"bin", "lib"}, f"Unexpected top-level dirs: {top_dirs}"
+
+    def test_psql_layer_unzipped_size_under_15mb(self):
+        """psql + libpq should be well under 15 MB."""
+        with zipfile.ZipFile(self.ZIP_PATH) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+        max_bytes = 15 * 1024 * 1024
+        assert total < max_bytes, (
+            f"psql layer unzipped size {total / 1024 / 1024:.1f} MB exceeds 15 MB"
+        )
+
+
+@pytest.mark.integration
+class TestCombinedLayerSizes:
+    """Validates that layer combinations stay within Lambda's 250 MB unzipped limit.
+
+    Lambda's hard limit: function code + all layers combined must be < 250 MB unzipped.
+    Post-Production (shared + ffmpeg) is the tightest combination.
+    """
+
+    @staticmethod
+    def _unzipped_size(path: str) -> int:
+        if not os.path.isfile(path):
+            pytest.skip(f"{path} not found — run build scripts first")
+        with zipfile.ZipFile(path) as zf:
+            return sum(info.file_size for info in zf.infolist())
+
+    def test_post_production_layers_under_250mb(self):
+        """Post-Production uses shared + ffmpeg — the tightest combination."""
+        shared = self._unzipped_size(os.path.join(REPO_ROOT, "build", "shared-layer.zip"))
+        ffmpeg = self._unzipped_size(
+            os.path.join(REPO_ROOT, "layers", "ffmpeg", "ffmpeg-layer.zip")
+        )
+        handler_estimate = 10 * 1024  # handler.py is tiny
+        total = shared + ffmpeg + handler_estimate
+        limit = 250 * 1024 * 1024
+        assert total < limit, (
+            f"Post-Production total {total / 1024 / 1024:.1f} MB "
+            f"exceeds Lambda's 250 MB limit"
+        )
+
+    def test_discovery_layers_under_250mb(self):
+        """Discovery uses shared + psql."""
+        shared = self._unzipped_size(os.path.join(REPO_ROOT, "build", "shared-layer.zip"))
+        psql = self._unzipped_size(
+            os.path.join(REPO_ROOT, "layers", "psql", "psql-layer.zip")
+        )
+        handler_estimate = 50 * 1024  # handler.py + prompts/
+        total = shared + psql + handler_estimate
+        limit = 250 * 1024 * 1024
+        assert total < limit, (
+            f"Discovery total {total / 1024 / 1024:.1f} MB "
+            f"exceeds Lambda's 250 MB limit"
+        )
+```
+
+Run these tests after building all layers:
+
+```bash
+# Build all artifacts first
+lambdas/shared/build.sh
+layers/ffmpeg/build.sh
+layers/psql/build.sh
+
+# Run packaging validation
+pytest tests/integration/test_packaging.py -v -m integration
+```
+
 ### End-to-End Tests
 
 End-to-end tests invoke a full Lambda handler locally with real external dependencies (real Bedrock, real API keys, real database). They verify that the entire handler path works — from input event through tool use to parsed output. E2E tests are expensive (Bedrock + Exa API calls) and slow (30-90 seconds per run), so they are run manually, not in CI.
@@ -3367,6 +3605,7 @@ Each handler's unit test file must verify:
 | Shared: db | `query` returns rows; `execute` returns rowcount; connection uses `sslmode=require` |
 | Shared: s3 | `upload_bytes` calls S3 `put_object`; `generate_presigned_url` returns valid URL |
 | MCP Server | See [MCP Server Tests](#mcp-server-tests) section below — 26 tools, 5 resources, fixtures, integration, and E2E tests. |
+| Packaging | **Shared layer:** zip exists; contains `python/shared/*.py` (6 modules); contains `python/psycopg2/`; contains `python/aws_lambda_powertools/`; all entries under `python/`; unzipped < 50 MB. **ffmpeg layer:** zip exists; `bin/ffmpeg` present; executable bit set; ELF x86_64 binary; only `bin/` dir; unzipped < 100 MB. **psql layer:** zip exists; `bin/psql` present; `lib/libpq.so*` present; executable bit set; ELF x86_64 binary; only `bin/` + `lib/` dirs; unzipped < 15 MB. **Combined sizes:** post-production (shared + ffmpeg) < 250 MB; discovery (shared + psql) < 250 MB. |
 
 ---
 

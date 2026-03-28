@@ -36,9 +36,9 @@ No modules. Every resource defined inline. This section maps each Terraform reso
 
 | Resource | Type | Notes |
 |----------|------|-------|
-| Shared Lambda Layer | `aws_lambda_layer_version` | Source: `lambdas/shared/` |
-| ffmpeg Lambda Layer | `aws_lambda_layer_version` | Source: `layers/ffmpeg/ffmpeg-layer.zip` (built by `build.sh`) |
-| psql Lambda Layer | `aws_lambda_layer_version` | Source: `layers/psql/psql-layer.zip` (built by `build.sh`). Provides `/opt/bin/psql` and `/opt/lib/libpq.so*`. |
+| Shared Lambda Layer | `aws_lambda_layer_version` | Source: `build/shared-layer.zip` (built by `lambdas/shared/build.sh`). `compatible_architectures = ["x86_64"]`. |
+| ffmpeg Lambda Layer | `aws_lambda_layer_version` | Source: `layers/ffmpeg/ffmpeg-layer.zip` (built by `build.sh`). `compatible_architectures = ["x86_64"]`. |
+| psql Lambda Layer | `aws_lambda_layer_version` | Source: `layers/psql/psql-layer.zip` (built by `build.sh`). Provides `/opt/bin/psql` and `/opt/lib/libpq.so*`. `compatible_architectures = ["x86_64"]`. |
 | Per-Lambda (×8): | | |
 | — Deployment package | `data "archive_file"` | Zips `handler.py` + `prompts/` dir |
 | — Function | `aws_lambda_function` | Python 3.12, layers attached, env vars set, `logging_config` block, `depends_on` log group |
@@ -86,14 +86,6 @@ Note: Lambdas that read from Postgres do so over the public internet using the c
 | State machine | `aws_sfn_state_machine` |
 | Execution IAM role | `aws_iam_role` |
 | Execution IAM policy | `aws_iam_role_policy` (invoke all 7 pipeline Lambdas) |
-
-### `scheduling.tf`
-
-| Resource | Type |
-|----------|------|
-| Scheduler rule | `aws_scheduler_schedule` |
-| Scheduler IAM role | `aws_iam_role` (permission to start Step Functions execution) |
-| Scheduler IAM policy | `aws_iam_role_policy` (`states:StartExecution` on the state machine) |
 
 ### `s3.tf`
 

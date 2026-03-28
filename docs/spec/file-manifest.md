@@ -15,12 +15,12 @@ Every file below must be created. No other files should be created.
 │   ├── outputs.tf
 │   ├── lambdas.tf
 │   ├── step-functions.tf
-│   ├── scheduling.tf
 │   ├── s3.tf
 │   ├── site.tf
 │   └── secrets.tf
 ├── lambdas/
 │   ├── shared/
+│   │   ├── build.sh
 │   │   └── python/
 │   │       └── shared/
 │   │           ├── __init__.py
@@ -85,6 +85,7 @@ Every file below must be created. No other files should be created.
 │   │       └── test_s3.py
 │   └── integration/
 │       ├── __init__.py
+│       ├── test_packaging.py
 │       ├── test_bedrock_live.py
 │       ├── test_discovery_live.py
 │       ├── test_discovery_e2e.py
@@ -100,9 +101,8 @@ Every file below must be created. No other files should be created.
 | `terraform/main.tf` | AWS provider configuration, Terraform backend (local state), common data sources (AWS account ID, region) |
 | `terraform/variables.tf` | Input variables: `elevenlabs_api_key`, `exa_api_key`, `db_connection_string`, `domain_name` |
 | `terraform/outputs.tf` | Exports: state machine ARN, site URL, S3 bucket name |
-| `terraform/lambdas.tf` | All 8 Lambda functions (7 pipeline + 1 site), their IAM roles and policies, CloudWatch log groups, `archive_file` data sources for deployment packages, shared Lambda Layer resource, ffmpeg Lambda Layer resource. No modules — every Lambda defined inline. |
+| `terraform/lambdas.tf` | All 8 Lambda functions (7 pipeline + 1 site), their IAM roles and policies, CloudWatch log groups, `archive_file` data sources for deployment packages, shared Lambda Layer resource, ffmpeg Lambda Layer resource, psql Lambda Layer resource. No modules — every Lambda defined inline. |
 | `terraform/step-functions.tf` | Step Functions state machine with inline ASL via `jsonencode()`. IAM execution role for Step Functions (permission to invoke pipeline Lambdas). |
-| `terraform/scheduling.tf` | EventBridge Scheduler rule (weekly, Sunday 9 AM Eastern via `schedule_expression_timezone = "America/New_York"`), IAM role for scheduler, target pointing to state machine ARN |
 | `terraform/s3.tf` | S3 bucket for episode assets (MP3, MP4, cover art PNGs). Bucket policy for CloudFront access. |
 | `terraform/site.tf` | Site Lambda function URL, CloudFront distribution (two origins: Function URL for HTML, S3 via OAC for cover art at `/assets/*`; ~1 hour TTL), Route53 A record for `podcast.ryans-lab.click` |
 | `terraform/secrets.tf` | `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version` for ElevenLabs and Exa API keys |
@@ -156,6 +156,7 @@ Every file below must be created. No other files should be created.
 | `tests/unit/test_shared/test_bedrock.py` | Unit tests for shared Bedrock client wrapper. |
 | `tests/unit/test_shared/test_db.py` | Unit tests for shared Postgres helper. |
 | `tests/unit/test_shared/test_s3.py` | Unit tests for shared S3 helper. |
+| `tests/integration/test_packaging.py` | Integration tests validating build artifacts: shared layer zip structure and contents, ffmpeg layer binary, psql layer binary + libpq, combined layer sizes within Lambda's 250 MB limit. Requires build scripts to be run first. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `tests/integration/test_bedrock_live.py` | Integration tests hitting real Bedrock. Marked `@pytest.mark.integration`. |
 | `tests/integration/test_s3_live.py` | Integration tests hitting real S3. Marked `@pytest.mark.integration`. |
 | `tests/integration/test_discovery_live.py` | Integration tests for Discovery external deps (psql, SSM, GitHub API). Marked `@pytest.mark.integration`. |
@@ -167,5 +168,7 @@ Every file below must be created. No other files should be created.
 
 | File | Purpose |
 |------|---------|
+| `lambdas/shared/build.sh` | Shell script that pip-installs `psycopg2-binary` and `aws-lambda-powertools` (with pinned versions, targeting `manylinux2014_x86_64`) into the `python/` directory alongside the shared source modules, then zips everything into `build/shared-layer.zip`. Run before `terraform plan`. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `layers/ffmpeg/build.sh` | Shell script that downloads a prebuilt Lambda-compatible ffmpeg binary (from `johnvansickle.com/ffmpeg` — the standard source for static ffmpeg builds), creates the Lambda Layer directory structure (`bin/ffmpeg`), and zips it. Output: `layers/ffmpeg/ffmpeg-layer.zip`. Run once manually before `terraform apply`. |
+| `layers/psql/build.sh` | Shell script that downloads PostgreSQL 16 RPMs for RHEL 9 (AL2023-compatible), extracts the `psql` binary and `libpq` shared library, and packages them as a Lambda Layer. Output: `layers/psql/psql-layer.zip`. Run once manually before `terraform apply`. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `README.md` | Project README. Already exists — no changes needed during implementation. |

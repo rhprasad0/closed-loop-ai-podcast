@@ -4,24 +4,88 @@
 
 Each Lambda needs its dependencies available at runtime. This section specifies how.
 
+### Architecture & Constraints
+
+All Lambda functions and layers target **x86_64** (Lambda's default architecture). This applies to pip `--platform` flags, static binaries (ffmpeg, psql), and the `compatible_architectures` attribute on every `aws_lambda_layer_version` resource in Terraform.
+
+Lambda limits that shape packaging decisions:
+
+| Limit | Value |
+|-------|-------|
+| Layers per function | 5 |
+| Total unzipped size (function + all layers) | 250 MB |
+
+Layer attachment by function:
+
+| Lambda | Layers | Est. Unzipped Size |
+|--------|--------|--------------------|
+| Discovery | shared + psql | ~40 MB |
+| Research, Script, Producer, Cover Art | shared | ~35 MB |
+| TTS | shared | ~35 MB |
+| Post-Production | shared + ffmpeg | ~115 MB |
+| Site | shared | ~35 MB |
+| MCP | shared | ~35 MB |
+
+Post-Production is the tightest at ~115 MB — well within the 250 MB ceiling. No function uses more than 2 layers.
+
 ### Shared Layer
 
-The shared layer at `lambdas/shared/` provides `bedrock.py`, `db.py`, `s3.py`, `logging.py`, and `types.py`. It also needs `psycopg2` for Postgres access and `aws-lambda-powertools` for structured logging.
+The shared layer at `lambdas/shared/` provides `bedrock.py`, `db.py`, `s3.py`, `logging.py`, and `types.py`. It also bundles `psycopg2` for Postgres access and `aws-lambda-powertools` for structured logging.
 
-Use `psycopg2-binary` is not compatible with Lambda's Amazon Linux environment. Use the `aws-psycopg2` package or include a pre-compiled `psycopg2` for Linux x86_64.
+Use `psycopg2-binary` with `--platform manylinux2014_x86_64 --only-binary=:all:`. The manylinux2014 wheels are compatible with Lambda's Amazon Linux 2023 runtime for Python 3.12. The older advice about needing `aws-psycopg2` or a Docker-compiled build is outdated.
 
-**Recommended approach:** Use a Lambda-compatible psycopg2 build. The `build.sh` pattern:
+Built by `lambdas/shared/build.sh`:
 
 ```bash
-cd lambdas/shared
-pip install aws-lambda-powertools psycopg2-binary -t python/ --platform manylinux2014_x86_64 --only-binary=:all:
-# shared Python modules are already in python/shared/
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build the shared Lambda Layer zip.
+# Installs pip dependencies alongside the shared Python modules,
+# then packages everything into a zip for Terraform to reference.
+#
+# Layer structure (extracted to /opt on Lambda):
+#   python/shared/         -> shared utility modules (committed source)
+#   python/psycopg2/       -> Postgres driver (pip-installed)
+#   python/aws_lambda_powertools/ -> structured logging (pip-installed)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+mkdir -p ../../build
+
+echo "Installing dependencies into python/..."
+pip install \
+    psycopg2-binary==2.9.11 \
+    aws-lambda-powertools==3.26.0 \
+    -t python/ \
+    --platform manylinux2014_x86_64 \
+    --only-binary=:all: \
+    --upgrade \
+    --quiet
+
+echo "Packaging shared layer..."
 zip -r ../../build/shared-layer.zip python/
+
+echo "Done: build/shared-layer.zip"
+echo "Layer size: $(du -h ../../build/shared-layer.zip | cut -f1)"
 ```
 
-Note: `psycopg2-binary` wheels for `manylinux2014_x86_64` DO work on Lambda. The old advice about needing a special build is outdated for Python 3.12 + `manylinux2014` wheels.
+**Directory structure clarification:** The `lambdas/shared/python/shared/` directory is committed source code. The pip-installed packages (`psycopg2/`, `aws_lambda_powertools/`, etc.) in `lambdas/shared/python/` are NOT committed — they are created by `build.sh` and excluded via `.gitignore`. See [Build Artifacts & .gitignore](#build-artifacts--gitignore).
 
-> **TODO:** Add a `lambdas/shared/build.sh` script to the file manifest that automates this (pip install + zip). Currently not in the manifest — the build steps above are manual.
+**Terraform integration:** The shared layer is referenced in `lambdas.tf` as a pre-built zip:
+
+```hcl
+resource "aws_lambda_layer_version" "shared" {
+  filename                 = "${path.module}/../build/shared-layer.zip"
+  source_code_hash         = filebase64sha256("${path.module}/../build/shared-layer.zip")
+  layer_name               = "${var.project_prefix}-shared"
+  compatible_runtimes      = ["python3.12"]
+  compatible_architectures = ["x86_64"]
+}
+```
+
+The zip must exist before `terraform plan`. This is the same pattern used for the ffmpeg and psql layers.
 
 ### Site Lambda
 
@@ -29,9 +93,11 @@ The site Lambda needs `jinja2`. Include it in the deployment package:
 
 ```bash
 cd lambdas/site
-pip install jinja2 -t .
+pip install jinja2==3.1.6 -t .
 zip -r ../../build/site.zip .
 ```
+
+The zip contains `handler.py`, `templates/base.html`, `templates/index.html`, and the pip-installed `jinja2` package. Terraform uses `data "archive_file"` on `lambdas/site/` — the pip install must run before `terraform plan`.
 
 ### TTS Lambda
 
@@ -45,11 +111,21 @@ import urllib.request
 
 **Decision:** Use `urllib.request` from Python stdlib for the ElevenLabs API call. No extra dependencies needed for the TTS Lambda.
 
-### Other Pipeline Lambdas
+### Post-Production Lambda
 
-Research, Script, Producer, Cover Art — these only need `boto3` (pre-installed on Lambda) and the shared layer. No additional dependencies.
+The Post-Production Lambda combines audio (MP3) and cover art (PNG) into a video (MP4) using ffmpeg. It attaches the **shared layer** (for S3/DB access) and the **ffmpeg layer** (for the `/opt/bin/ffmpeg` binary). No additional pip dependencies.
 
-Discovery additionally needs the psql Lambda layer (see below) and uses `urllib.request` from stdlib for the Exa and GitHub API calls — no extra pip dependencies.
+The deployment package is just `handler.py` — all heavy lifting comes from layers. This Lambda gets 1024 MB memory (ffmpeg needs more than the default 512 MB; see [Appendix A](../../IMPLEMENTATION_SPEC.md)).
+
+### Discovery, Research, Script, Producer, Cover Art
+
+Research, Script, Producer, and Cover Art only need `boto3` (pre-installed on Lambda) and the shared layer. No additional dependencies.
+
+Discovery additionally needs the **psql layer** (provides `/opt/bin/psql` and `/opt/lib/libpq.so*`) for the `query_postgres` tool, which runs SQL queries via subprocess. It uses `urllib.request` from stdlib for the Exa and GitHub API calls — no extra pip dependencies.
+
+### MCP Lambda
+
+The MCP Lambda's packaging is specified in [MCP Server — Dependencies](./mcp-server.md#dependencies). It bundles `mcp[cli]` into its deployment package (same pip-install-into-directory pattern as the Site Lambda's jinja2) and attaches the shared layer.
 
 ### psql Layer
 
@@ -148,6 +224,34 @@ echo "Done: $OUTPUT_DIR/ffmpeg-layer.zip"
 rm -rf "$BUILD_DIR"
 ```
 
+**Fallback source:** The `johnvansickle.com` static builds are the standard source for static ffmpeg on Linux. If the site becomes unavailable, the [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) GitHub repository provides equivalent `linux64-gpl` static builds with daily automated releases. Substitute the download URL and adjust the tar extraction path (`ffmpeg-master-latest-linux64-gpl/bin/ffmpeg`).
+
+### Build Artifacts & .gitignore
+
+Build scripts output artifacts that must NOT be committed to git:
+
+| Artifact | Created by | Path |
+|----------|-----------|------|
+| Shared layer zip | `lambdas/shared/build.sh` | `build/shared-layer.zip` |
+| Site Lambda zip | manual pip + zip | `build/site.zip` |
+| ffmpeg layer zip | `layers/ffmpeg/build.sh` | `layers/ffmpeg/ffmpeg-layer.zip` |
+| psql layer zip | `layers/psql/build.sh` | `layers/psql/psql-layer.zip` |
+| Pip packages in shared layer | `lambdas/shared/build.sh` | `lambdas/shared/python/*` (except `shared/`) |
+
+The `build/` directory is created by `mkdir -p` in build scripts — it does not need to exist in the repo.
+
+Required `.gitignore` entries:
+
+```
+build/
+layers/ffmpeg/ffmpeg-layer.zip
+layers/psql/psql-layer.zip
+
+# Pip-installed packages in shared layer (source code in python/shared/ IS committed)
+lambdas/shared/python/*
+!lambdas/shared/python/shared/
+```
+
 ### Dev Dependencies
 
 These packages are needed in the development environment (devcontainer) but are NOT deployed to Lambda:
@@ -164,9 +268,14 @@ The devcontainer Dockerfile installs these automatically. They support type chec
 
 Steps to deploy the pipeline from scratch, in order:
 
-1. **Run `layers/ffmpeg/build.sh`** to create `ffmpeg-layer.zip`.
-2. **Database already created.** The `zerostars` database and all tables (see [Database Schema](./database-schema.md)) have been provisioned on the RDS instance.
-3. **Build the shared layer** (install psycopg2, zip).
+1. **Build layers** (these three can run in parallel):
+   - Run `layers/psql/build.sh` to create `psql-layer.zip`.
+   - Run `layers/ffmpeg/build.sh` to create `ffmpeg-layer.zip`.
+   - Run `lambdas/shared/build.sh` to create `build/shared-layer.zip`.
+2. **Prepare Lambdas with pip dependencies** (can also run in parallel with step 1):
+   - Site Lambda: `cd lambdas/site && pip install jinja2==3.1.6 -t .`
+   - MCP Lambda: `cd lambdas/mcp && pip install "mcp[cli]==1.26.0" -t . --platform manylinux2014_x86_64 --only-binary=:all:`
+3. **Database already provisioned.** The `zerostars` database and all tables (see [Database Schema](./database-schema.md)) exist on the RDS instance.
 4. **Run `terraform init` and `terraform apply`** in `terraform/`.
 5. **Enable Bedrock model access** for Claude and Nova Canvas in the AWS console (this cannot be done via Terraform).
-6. **Verify:** Manually trigger the Step Functions state machine to test an end-to-end run.
+6. **Verify:** Trigger a pipeline run via the [MCP server](./mcp-server.md) or manually start the Step Functions state machine from the AWS console.
