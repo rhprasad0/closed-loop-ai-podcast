@@ -960,4 +960,4 @@ MCP-triggered executions use the name pattern `mcp-{iso-timestamp}` (e.g., `mcp-
 
 ## Testing
 
-See [Testing — MCP Server Tests](./testing.md#mcp-server-tests) for unit, integration, and end-to-end test specifications.
+See [MCP Server Testing](./testing-mcp.md) for unit, integration, and end-to-end test specifications.

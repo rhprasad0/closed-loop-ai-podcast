@@ -20,7 +20,8 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | [Lambda Packaging & Deployment](docs/spec/packaging-and-deployment.md) | Dependencies, layers, deploy sequence |
 | [Structured Logging](docs/spec/structured-logging.md) | Powertools logger, CloudWatch patterns |
 | [Type Checking](docs/spec/type-checking.md) | mypy strict config, TypedDict definitions |
-| [Testing](docs/spec/testing.md) | pytest setup, unit/integration/e2e tests |
+| [Testing](docs/spec/testing.md) | pytest setup, unit/integration/e2e tests for pipeline handlers |
+| [MCP Server Testing](docs/spec/testing-mcp.md) | Unit/integration/e2e tests for MCP server tools and resources |
 | [CI Pipeline](docs/spec/ci-pipeline.md) | GitHub Actions workflow, ruff config |
 | [MCP Server](docs/spec/mcp-server.md) | MCP control plane — tools, resources, Lambda architecture |
 
