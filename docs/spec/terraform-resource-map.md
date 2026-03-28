@@ -60,8 +60,10 @@ logging_config {
 
 | Variable | Value |
 |----------|-------|
-| `POWERTOOLS_SERVICE_NAME` | Function-specific: `discovery`, `research`, `script`, `producer`, `cover_art`, `tts`, `post_production`, `site` |
+| `POWERTOOLS_SERVICE_NAME` | Function-specific: `discovery`, `research`, `script`, `producer`, `cover_art`, `tts`, `post_production`, `site`, `mcp` |
 | `POWERTOOLS_LOG_LEVEL` | `INFO` |
+| `POWERTOOLS_METRICS_NAMESPACE` | `ZeroStars` |
+| `POWERTOOLS_TRACER_CAPTURE_RESPONSE` | `false` |
 | `S3_BUCKET` | Cover Art, Post-Production, Site: `aws_s3_bucket.episodes.id` (the episodes bucket name) |
 
 **Per-Lambda IAM permissions:**
@@ -114,3 +116,20 @@ Note: Lambdas that read from Postgres do so over the public internet using the c
 |----------|------|
 | ElevenLabs secret | `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version` |
 | Exa secret | `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version` |
+
+### `observability.tf`
+
+| Resource | Type |
+|----------|------|
+| SNS alerts topic | `aws_sns_topic` |
+| SNS email subscription | `aws_sns_topic_subscription` (conditional on `var.alert_email`) |
+| Pipeline failure alarm | `aws_cloudwatch_metric_alarm` (`AWS/States` `ExecutionsFailed`) |
+| Pipeline timeout alarm | `aws_cloudwatch_metric_alarm` (`AWS/States` `ExecutionsTimedOut`) |
+| Pipeline throttle alarm | `aws_cloudwatch_metric_alarm` (`AWS/States` `ExecutionThrottled`) |
+| Per-Lambda error alarms (x9) | `aws_cloudwatch_metric_alarm` (`AWS/Lambda` `Errors`) |
+| Per-Lambda timeout alarms (x9) | `aws_cloudwatch_metric_alarm` (`AWS/Lambda` `Duration` p99) |
+| Per-Lambda throttle alarms (x9) | `aws_cloudwatch_metric_alarm` (`AWS/Lambda` `Throttles`) |
+| Producer fail rate alarm | `aws_cloudwatch_metric_alarm` (`ZeroStars` `ProducerVerdict`) |
+| Script length alarm | `aws_cloudwatch_metric_alarm` (`ZeroStars` `ScriptCharacterCount`) |
+
+See [Observability](./observability.md) for alarm thresholds and configuration details.

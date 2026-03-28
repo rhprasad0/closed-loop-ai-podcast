@@ -28,6 +28,8 @@ Every file below must be created. No other files should be created.
 │   │           ├── db.py
 │   │           ├── s3.py
 │   │           ├── logging.py
+│   │           ├── tracing.py
+│   │           ├── metrics.py
 │   │           └── types.py
 │   ├── discovery/
 │   │   ├── handler.py
@@ -106,16 +108,19 @@ Every file below must be created. No other files should be created.
 | `terraform/s3.tf` | S3 bucket for episode assets (MP3, MP4, cover art PNGs). Bucket policy for CloudFront access. |
 | `terraform/site.tf` | Site Lambda function URL, CloudFront distribution (two origins: Function URL for HTML, S3 via OAC for cover art at `/assets/*`; ~1 hour TTL), Route53 A record for `podcast.ryans-lab.click` |
 | `terraform/secrets.tf` | `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version` for ElevenLabs and Exa API keys |
+| `terraform/observability.tf` | CloudWatch Alarms (pipeline-level, per-Lambda, custom metric) and SNS topic for alert notifications. See [Observability](./observability.md). |
 
 ### Lambda Source Files
 
 | File | Purpose |
 |------|---------|
-| `lambdas/shared/python/shared/__init__.py` | Package init. Re-exports `bedrock`, `db`, `s3`, `logging`, `types` modules for `from shared import bedrock, db, s3` usage. |
+| `lambdas/shared/python/shared/__init__.py` | Package init. Re-exports `bedrock`, `db`, `s3`, `logging`, `tracing`, `metrics`, `types` modules for `from shared import bedrock, db, s3` usage. |
 | `lambdas/shared/python/shared/bedrock.py` | Bedrock client wrapper. Functions: `invoke_model(prompt, system_prompt, model_id)`, `invoke_with_tools(prompt, system_prompt, tools, model_id)`. Default model: Claude on Bedrock. Handles retries for throttling. |
 | `lambdas/shared/python/shared/db.py` | Postgres connection helper. Uses `psycopg2` with `sslmode=require`. Functions: `get_connection()`, `query(sql, params)` (returns rows), `execute(sql, params)` (returns rowcount). Connection string from `DB_CONNECTION_STRING` env var. |
 | `lambdas/shared/python/shared/s3.py` | S3 helper functions: `upload_bytes(bucket, key, data, content_type)`, `upload_file(bucket, key, filepath, content_type)`, `generate_presigned_url(bucket, key, expiry)`. Bucket name from `S3_BUCKET` env var. |
-| `lambdas/shared/python/shared/logging.py` | Powertools Logger factory. Exports `get_logger(service)` which returns a pre-configured structured JSON logger. See [Structured Logging](./structured-logging.md). |
+| `lambdas/shared/python/shared/logging.py` | Powertools Logger factory. Exports `get_logger(service)` which returns a pre-configured structured JSON logger. See [Instrumentation](./instrumentation.md). |
+| `lambdas/shared/python/shared/tracing.py` | Powertools Tracer factory. Exports `get_tracer(service)` which returns a Tracer with auto-patching enabled. See [Instrumentation](./instrumentation.md). |
+| `lambdas/shared/python/shared/metrics.py` | Powertools Metrics factory. Exports `get_metrics(service)` which returns a Metrics instance under the `ZeroStars` namespace. See [Instrumentation](./instrumentation.md). |
 | `lambdas/shared/python/shared/types.py` | TypedDict definitions for all Lambda input/output contracts. `PipelineState`, `DiscoveryOutput`, `ResearchOutput`, `ScriptOutput`, `ProducerOutput`, `CoverArtOutput`, `TTSOutput`, `PostProductionOutput`. See [Type Checking](./type-checking.md). |
 | `lambdas/discovery/handler.py` | Discovery agent. Reads episode history and metrics from Postgres. Calls Bedrock with Exa search as a tool. Returns selected repo and discovery rationale. |
 | `lambdas/discovery/prompts/discovery.md` | System prompt for the Discovery agent. Search criteria, what to look for, how to use episode metrics to bias search. |

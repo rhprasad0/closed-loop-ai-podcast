@@ -233,7 +233,7 @@ The Discovery agent uses Bedrock's tool-use capability to call Exa. Define Exa s
 }
 ```
 
-When Bedrock returns a `tool_use` block for `exa_search`, the Lambda translates snake_case tool inputs to camelCase and executes the actual Exa API call:
+When Bedrock returns a `tool_use` block for `exa_search`, the Lambda translates snake_case tool inputs to camelCase and executes the actual Exa API call via `urllib.request` with a **30-second timeout**:
 
 ```
 POST https://api.exa.ai/search
@@ -332,7 +332,7 @@ The Discovery agent uses this tool to verify star counts and repo metadata befor
 }
 ```
 
-**Handler implementation:** When Bedrock returns a `tool_use` block for `get_github_repo`, the handler calls the GitHub REST API:
+**Handler implementation:** When Bedrock returns a `tool_use` block for `get_github_repo`, the handler calls the GitHub REST API via `urllib.request` with a **15-second timeout**:
 
 ```
 GET https://api.github.com/repos/{owner}/{repo}

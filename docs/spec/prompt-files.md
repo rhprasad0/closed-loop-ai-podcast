@@ -2,7 +2,7 @@
 
 # Prompt Files
 
-The content for each Lambda's `prompts/` directory. These are bundled into the Lambda deployment package and read at runtime via `LAMBDA_TASK_ROOT`.
+The content for each Lambda's `prompts/` directory. These are bundled into the Lambda deployment package and read at runtime via `LAMBDA_TASK_ROOT` (set automatically by the Lambda runtime; falls back to `Path(__file__).parent` for local testing).
 
 ### `lambdas/discovery/prompts/discovery.md`
 

@@ -82,6 +82,13 @@ The Discovery agent queries Postgres directly using a `query_postgres` Bedrock t
 }
 ```
 
+**Output parsing:** The handler must parse the agent's final text response as JSON. Because Claude models sometimes wrap JSON in markdown fences (~20% of the time despite prompt instructions), the parser strips `` ``` `` fences before `json.loads()`. It then validates:
+- All 9 required fields are present
+- `star_count` is an integer under 10
+- `repo_url` starts with `https://github.com/`
+
+If validation fails, the handler raises `ValueError`, causing the Lambda to fail. Step Functions retries handle transient agent output issues.
+
 ### Research Lambda
 
 **Reads from state:**

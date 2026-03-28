@@ -18,7 +18,8 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | [Database Schema](docs/spec/database-schema.md) | DDL for the zerostars database |
 | [Prompt Files](docs/spec/prompt-files.md) | Agent prompt specifications |
 | [Lambda Packaging & Deployment](docs/spec/packaging-and-deployment.md) | Dependencies, layers, deploy sequence |
-| [Structured Logging](docs/spec/structured-logging.md) | Powertools logger, CloudWatch patterns |
+| [Instrumentation](docs/spec/instrumentation.md) | Powertools Logger, Tracer, Metrics — structured logging, X-Ray tracing, custom CloudWatch metrics |
+| [Observability](docs/spec/observability.md) | CloudWatch Alarms, SNS alerting, dashboard recommendations |
 | [Type Checking](docs/spec/type-checking.md) | mypy strict config, TypedDict definitions |
 | [Testing](docs/spec/testing.md) | pytest setup, unit/integration/e2e tests for pipeline handlers |
 | [MCP Server Testing](docs/spec/testing-mcp.md) | Unit/integration/e2e tests for MCP server tools and resources |
