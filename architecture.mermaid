@@ -51,7 +51,7 @@ graph TB
     COVERART -.-> BEDROCK
     TTS -.-> ELEVENLABS
 
-    RDS -. "episode history + metrics<br/>feed search objectives" .-> DISCOVERY
+    RDS -. "episode history + featured devs<br/>exclusion list" .-> DISCOVERY
     RDS -. "top-performing scripts<br/>as quality benchmark" .-> PRODUCER
 
     COVERART --> S3

@@ -476,7 +476,7 @@ Health check across the pipeline: success/failure rates, running executions, rec
 
 ### Data
 
-All data tools connect to Postgres using `psycopg2` from the shared Lambda Layer. Connection string from SSM Parameter Store `/zerostars/db-connection-string`, fetched at cold start and cached. Same pattern as existing pipeline Lambdas — public internet connection, no VPC. See [Database Schema](./database-schema.md) for DDL.
+All data tools connect to Postgres using `psycopg2` via `shared/db.py`. Connection string from the `DB_CONNECTION_STRING` environment variable. Same pattern as existing pipeline Lambdas — public internet connection, no VPC. See [Database Schema](./database-schema.md) for DDL.
 
 #### `query_episodes`
 
@@ -850,6 +850,10 @@ resource "aws_lambda_function" "mcp" {
 
   layers = [aws_lambda_layer_version.shared.arn]
 
+  tracing_config {
+    mode = "Active"
+  }
+
   logging_config {
     log_format            = "JSON"
     application_log_level = "INFO"
@@ -858,15 +862,20 @@ resource "aws_lambda_function" "mcp" {
 
   environment {
     variables = {
-      POWERTOOLS_SERVICE_NAME    = "mcp"
-      POWERTOOLS_LOG_LEVEL       = "INFO"
-      STATE_MACHINE_ARN          = aws_sfn_state_machine.pipeline.arn
+      POWERTOOLS_SERVICE_NAME             = "mcp"
+      POWERTOOLS_LOG_LEVEL               = "INFO"
+      POWERTOOLS_METRICS_NAMESPACE       = "ZeroStars"
+      POWERTOOLS_TRACER_CAPTURE_RESPONSE = "false"
+      DB_CONNECTION_STRING               = var.db_connection_string
+      STATE_MACHINE_ARN                  = aws_sfn_state_machine.pipeline.arn
       S3_BUCKET                  = aws_s3_bucket.episodes.id
       CLOUDFRONT_DISTRIBUTION_ID = aws_cloudfront_distribution.site.id
       ACM_CERTIFICATE_ARN        = aws_acm_certificate.site.arn
       SITE_DOMAIN                = var.domain_name
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.mcp]
 }
 
 resource "aws_lambda_function_url" "mcp" {
@@ -905,10 +914,9 @@ output "mcp_function_url" {
 | `states:ListExecutions` | State machine ARN | `list_executions`, `get_pipeline_health` |
 | `states:GetExecutionHistory` | `*` | `get_execution_status`, `get_execution_history` |
 | `lambda:InvokeFunction` | All 7 pipeline Lambda ARNs | `invoke_*` tools |
-| `logs:FilterLogEvents` | All 8 Lambda log group ARNs | `get_agent_logs` |
+| `logs:FilterLogEvents` | All 9 Lambda log group ARNs | `get_agent_logs` |
 | `s3:GetObject` | `arn:aws:s3:::zerostars-episodes-*/*` | `get_episode_assets`, `get_presigned_url` |
 | `s3:ListBucket` | `arn:aws:s3:::zerostars-episodes-*` | `list_s3_assets` |
-| `ssm:GetParameter` | `/zerostars/db-connection-string` | All data tools |
 | `cloudfront:CreateInvalidation` | Distribution ARN | `invalidate_cache` |
 | `cloudfront:GetDistribution` | Distribution ARN | `get_site_status` |
 | `acm:DescribeCertificate` | Certificate ARN | `get_site_status` |
@@ -941,7 +949,7 @@ To support `retry_from_step`, the state machine ASL in `terraform/step-functions
 
 ### Database Access: Direct Connection, No VPC
 
-The MCP Lambda connects to Postgres over the public internet using the connection string from SSM, same as all existing pipeline Lambdas. No VPC, no RDS Proxy.
+The MCP Lambda connects to Postgres over the public internet using the `DB_CONNECTION_STRING` environment variable, same as all existing pipeline Lambdas. No VPC, no RDS Proxy.
 
 **Why:** The pipeline already works this way. MCP has very low concurrency (1-2 connections at most from a single user). RDS Proxy ($15+/month) solves a connection pooling problem that doesn't exist here. Adding VPC would increase cold start from ~1-2s to ~5-10s and be inconsistent with the rest of the architecture.
 

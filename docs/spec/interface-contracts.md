@@ -57,13 +57,13 @@ The state object grows as it passes through the pipeline. Each key is populated 
 - `featured_developers` — all rows, to exclude previously featured developers from search
 - `episodes` — `repo_url` column, to avoid re-featuring the same repository
 
-The Discovery agent queries Postgres directly using a `query_postgres` Bedrock tool backed by the `psql` binary (packaged as a Lambda layer). The handler fetches the DB connection string from SSM Parameter Store (`/zerostars/db-connection-string`) at runtime, not from an environment variable.
+The Discovery agent queries Postgres using a `query_postgres` Bedrock tool backed by `shared/db.py` (psycopg2). The handler reads the connection string from the `DB_CONNECTION_STRING` environment variable.
 
 > **Deferred:** Querying `episode_metrics` to bias search toward better-performing project types ships as a separate feature. The Discovery agent does not read `episode_metrics` in v1.
 
 **Bedrock tools:** The Discovery agent has three tools available during its agentic loop:
 1. `exa_search` — neural search via Exa API to find candidate repos (see [Exa Search API](./external-api-contracts.md#exa-search-api))
-2. `query_postgres` — read-only SQL against the podcast database via psql subprocess (see [Discovery Postgres Tool](./external-api-contracts.md#discovery-postgres-tool-query_postgres))
+2. `query_postgres` — read-only SQL against the podcast database via `shared/db.py` (see [Discovery Postgres Tool](./external-api-contracts.md#discovery-postgres-tool-query_postgres))
 3. `get_github_repo` — GitHub REST API to verify star counts and repo metadata (see [Discovery GitHub Tool](./external-api-contracts.md#discovery-github-tool-get_github_repo))
 
 **Returns:** (placed at `$.discovery` by Step Functions)
@@ -152,7 +152,7 @@ If validation fails, the handler raises `ValueError`, causing the Lambda to fail
 - `$.research.hiring_signals` — to verify the hiring segment uses real observations
 
 **Reads from Postgres:**
-- `episodes` + `episode_metrics` — top-performing episode scripts (by engagement) to use as quality benchmarks
+- `episodes` LEFT JOIN `episode_metrics` — top-performing episode scripts (by engagement score, falling back to most recent by `created_at` when no metrics exist) to use as quality benchmarks. Returns an empty list when no episodes exist yet.
 
 **Returns (PASS):** (placed at `$.producer` by Step Functions)
 
@@ -211,15 +211,24 @@ If validation fails, the handler raises `ValueError`, causing the Lambda to fail
 ### Post-Production Lambda
 
 **Reads from state:**
-- `$.metadata.execution_id` — for S3 key prefix (MP4 output)
-- `$.discovery.repo_url`, `$.discovery.repo_name`, `$.discovery.developer_github`, `$.discovery.star_count` — for the `episodes` DB row
+- `$.metadata.execution_id` — for S3 key prefix (MP4 output) and `episodes.execution_id` column
+- `$.discovery.repo_url`, `$.discovery.repo_name`, `$.discovery.developer_github`, `$.discovery.star_count`, `$.discovery.language` — for the `episodes` DB row
 - `$.research.developer_name` — for the `episodes` DB row
 - `$.research` — full object, stored as `research_json` in `episodes`
 - `$.script.text` — stored as `script_text` in `episodes`
 - `$.metadata.script_attempt` — stored as `producer_attempts` in `episodes`
-- `$.cover_art.s3_key` — to download the PNG for ffmpeg input
+- `$.cover_art.s3_key` — to download the PNG for ffmpeg input; also stored as `episodes.s3_cover_art_path`
 - `$.cover_art.prompt_used` — stored as `cover_art_prompt` in `episodes`
-- `$.tts.s3_key` — to download the MP3 for ffmpeg input
+- `$.tts.s3_key` — to download the MP3 for ffmpeg input; also stored as `episodes.s3_mp3_path`
+
+**Database writes:**
+
+1. **INSERT into `episodes`** — creates the episode row with all fields above. `air_date` is computed as `date.today()` in Eastern Time (`America/New_York`). The MP4 S3 key is stored as `s3_mp4_path`.
+2. **INSERT into `featured_developers`** — records `(developer_github, episode_id, featured_date)` so Discovery's exclusion query has data. `featured_date` is computed as `date.today()` in Eastern Time, same as `air_date`.
+
+> **Intentionally not persisted:** `discovery_rationale` (available in state at `$.discovery.discovery_rationale`) is not written to the database. It serves as context for downstream agents during the pipeline run but has no long-term value in the episodes table.
+
+> **Intentionally not persisted:** `producer_score` and `producer_notes` (available in state at `$.producer.score` and `$.producer.notes`) are not written to the database. The Producer's verdict gates the pipeline (PASS/FAIL), but the numeric score and notes are ephemeral evaluation artifacts, not episode metadata.
 
 **Returns:** (placed at `$.post_production` by Step Functions)
 
@@ -258,4 +267,4 @@ The `script.text` field is the contract between the Script Lambda (writer) and t
 **Phil:** But what is incredible, really? Is it the code, or is it the coder?
 ```
 
-> **TODO:** This exact format specification (the three labels, one turn per line, no stage directions) must be embedded in the Script agent prompt (`lambdas/script/prompts/script.md`) so the model produces compliant output. The Producer agent prompt should also enforce this as a FAIL condition.
+This exact format specification is embedded in both the Script agent prompt (`lambdas/script/prompts/script.md`) and the Producer rubric (criterion 9). See [Prompt Files](./prompt-files.md).

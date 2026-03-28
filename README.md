@@ -62,7 +62,7 @@ graph TB
     COVERART -.-> BEDROCK
     TTS -.-> ELEVENLABS
 
-    RDS -. "episode history + metrics<br/>feed search objectives" .-> DISCOVERY
+    RDS -. "episode history + featured devs<br/>exclusion list" .-> DISCOVERY
     RDS -. "top-performing scripts<br/>as quality benchmark" .-> PRODUCER
 
     COVERART --> S3
@@ -106,8 +106,7 @@ Step Functions State Machine (Standard)
         │
         ├──► Discovery Agent Lambda
         │      Bedrock + Exa API
-        │      Queries episode history to avoid repeats
-        │      Queries episode metrics to bias toward what performs well
+        │      Queries episode history + featured devs to avoid repeats
         │
         ├──► Research Agent Lambda
         │      Bedrock + GitHub API
@@ -146,7 +145,7 @@ The podcast website is a **dynamic site** — a Lambda Function URL backed by Po
 
 **Evaluator-optimizer loop.** The Producer agent evaluates the Script agent's output against a rubric (character count, segment structure, persona voice distinctness, hiring segment specificity). On failure, it returns structured feedback that the Script agent uses on its next attempt. This is implemented as a Step Functions Choice state with a retry counter — the same pattern AWS documents in their [prescriptive guidance for agentic AI](https://docs.aws.amazon.com/prescriptive-guidance/latest/agentic-ai-patterns/evaluator-reflect-refine-loop-patterns.html).
 
-**Cross-episode learning.** The Discovery agent queries an `episode_metrics` table (LinkedIn views, likes, comments) and the `episodes` table (previously featured developers and project types). Search objectives evolve based on what actually performed well. The Producer agent reads top-performing scripts from Postgres as quality benchmarks, so the quality bar adapts to what resonates with the audience rather than relying on a static rubric alone.
+**Cross-episode learning.** The Discovery agent queries the `episodes` and `featured_developers` tables to avoid repeating projects or developers. The Producer agent reads top-performing scripts from Postgres as quality benchmarks, so the quality bar adapts to what resonates with the audience rather than relying on a static rubric alone. Engagement-based search biasing (via `episode_metrics`) is planned as a future feature.
 
 **Tool use.** The Discovery and Research agents use Bedrock's tool-use capabilities to call external APIs (Exa search, GitHub API) as part of their reasoning, rather than hardcoded API-then-LLM sequences.
 
@@ -176,13 +175,13 @@ Everything is Terraform. Everything is serverless.
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
+│   ├── lambdas.tf
 │   ├── step-functions.tf
-│   ├── mcp.tf
-│   ├── rds.tf
 │   ├── s3.tf
 │   ├── site.tf
-│   └── modules/
-│       └── lambda/
+│   ├── secrets.tf
+│   ├── observability.tf
+│   └── mcp.tf
 ├── lambdas/
 │   ├── shared/                  # Lambda Layer: Bedrock client, DB helpers, S3 utils
 │   ├── discovery/
@@ -197,24 +196,28 @@ Everything is Terraform. Everything is serverless.
 │   ├── producer/
 │   │   ├── handler.py
 │   │   └── prompts/producer.md
-│   ├── cover-art/
+│   ├── cover_art/
 │   │   ├── handler.py
-│   │   └── prompts/cover-art.md
+│   │   └── prompts/cover_art.md
 │   ├── tts/
 │   │   └── handler.py
-│   ├── post-production/
+│   ├── post_production/
 │   │   └── handler.py
 │   ├── site/
 │   │   ├── handler.py
 │   │   └── templates/
 │   └── mcp/                   # MCP control plane (26 tools, 5 resources)
 │       ├── handler.py
+│       ├── resources.py
 │       └── tools/
 ├── layers/
 │   └── ffmpeg/
-├── site/                        # Static assets (CSS, images)
 ├── sql/
 │   └── schema.sql
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/
 └── README.md
 ```
 

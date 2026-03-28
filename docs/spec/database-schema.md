@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     s3_mp4_path     TEXT,
     s3_cover_art_path TEXT,
     producer_attempts INTEGER DEFAULT 1,
+    execution_id    TEXT,
+    language        TEXT,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS episode_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_episode_metrics_episode_id ON episode_metrics(episode_id);
+ALTER TABLE episode_metrics ADD CONSTRAINT episode_metrics_episode_snapshot_unique UNIQUE (episode_id, snapshot_date);
 
 CREATE TABLE IF NOT EXISTS featured_developers (
     developer_github TEXT PRIMARY KEY,

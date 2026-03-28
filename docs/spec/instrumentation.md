@@ -19,6 +19,10 @@ from aws_lambda_powertools import Logger
 def get_logger(service: str) -> Logger:
     """Return a pre-configured Powertools Logger for the given service."""
     return Logger(service=service, log_uncaught_exceptions=True)
+    # NOTE: Powertools maintainers warn that log_uncaught_exceptions=True may
+    # not function correctly in the Lambda runtime environment. If uncaught
+    # exceptions are not appearing in logs, remove this parameter and rely on
+    # Lambda's native error logging instead.
 ```
 
 ### Handler Pattern
@@ -85,11 +89,11 @@ This is not in the universal template because `script_attempt` is only present i
 
 Structured logs must never contain secrets or PII:
 
-- **Never log:** API keys, database connection strings, Secrets Manager values, SSM SecureString parameter values, or AWS credentials. If a function fetches a secret, log the parameter name (e.g., `"Fetched Exa API key from Secrets Manager"`) but never the value.
+- **Never log:** API keys, database connection strings, Secrets Manager values, or AWS credentials. If a function fetches a secret, log the parameter name (e.g., `"Fetched Exa API key from Secrets Manager"`) but never the value.
 - **Request/response bodies at DEBUG only:** Full Bedrock request/response payloads, raw API responses from Exa and GitHub, and raw ElevenLabs API responses should only be logged at `DEBUG` level (off by default). At `INFO` level, log summaries: repo URL, character count, verdict, duration — not full payloads.
 - **Presigned URLs:** Do not log S3 presigned URLs at INFO level. They contain temporary credentials in the query string. Log the S3 key instead.
 
-Powertools provides a [data masking utility](https://docs.powertools.aws.dev/lambda/python/latest/utilities/data_masking/) but it is unnecessary here — the approach is simpler: do not pass sensitive values to log calls in the first place. The module-level credential caching pattern (SSM/Secrets Manager values stored in private globals like `_db_connection_string`) keeps secrets in variables that are never logged.
+Powertools provides a [data masking utility](https://docs.powertools.aws.dev/lambda/python/latest/utilities/data_masking/) but it is unnecessary here — the approach is simpler: do not pass sensitive values to log calls in the first place. The `DB_CONNECTION_STRING` env var and Secrets Manager values (for API keys) are never passed to log calls.
 
 ### Standard Fields
 
@@ -145,7 +149,7 @@ def get_tracer(service: str) -> Tracer:
 
 The constructor is deliberately simple. Response auto-capture is disabled globally via the `POWERTOOLS_TRACER_CAPTURE_RESPONSE` environment variable (set to `false` in Terraform) rather than per-decorator, because pipeline responses can approach X-Ray's 64 KB metadata limit and the MCP Lambda streams responses. The env var is cleaner than adding `capture_response=False` to every `@tracer.capture_lambda_handler` and `@tracer.capture_method` call.
 
-`Tracer()` auto-patches boto3 clients by default (`auto_patch=True`), so all Bedrock, S3, SSM, and Secrets Manager calls automatically appear as X-Ray subsegments without additional code. **Do not set `auto_patch=False`** — Powertools documentation explicitly warns against this when reusing Tracer across Lambda Layers or multiple modules, as it prevents patching from propagating.
+`Tracer()` auto-patches boto3 clients by default (`auto_patch=True`), so all Bedrock, S3, and Secrets Manager calls automatically appear as X-Ray subsegments without additional code. **Do not set `auto_patch=False`** — Powertools documentation explicitly warns against this when reusing Tracer across Lambda Layers or multiple modules, as it prevents patching from propagating.
 
 ### Tracing Methods
 
@@ -266,7 +270,7 @@ The `logging_config` block ensures Lambda system logs (platform start/end/report
 
 The `tracing_config { mode = "Active" }` block enables X-Ray active tracing on each Lambda. This populates the `_X_AMZN_TRACE_ID` environment variable that Powertools reads to include `xray_trace_id` in every structured log line and that Tracer uses to contribute subsegments to the active trace. Without this block, the `xray_trace_id` field silently omits from logs. Each Lambda execution role must have `xray:PutTraceSegments` and `xray:PutTelemetryRecords` permissions — attach the `AWSXrayWriteOnlyAccess` managed policy or an equivalent inline policy.
 
-> **Known Terraform issue:** The AWS provider has a bug (hashicorp/terraform-provider-aws#42181) where `log_format = "JSON"` causes perpetual plan drift. If your provider version is affected, add `lifecycle { ignore_changes = [logging_config] }` to each Lambda resource as a workaround.
+> **Known Terraform issue:** The AWS provider has a bug (hashicorp/terraform-provider-aws#42181) where `log_format = "JSON"` causes perpetual plan drift. If your provider version is affected, add `lifecycle { ignore_changes = [logging_config] }` to each Lambda resource as a workaround. This workaround is specifically for Terraform AWS provider bug [#42181](https://github.com/hashicorp/terraform-provider-aws/issues/42181) and can be removed once the provider is upgraded to >= 6.1.0, where the fix was released.
 
 ### CloudWatch Log Groups
 

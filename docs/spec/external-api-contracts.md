@@ -272,14 +272,14 @@ Response (200 OK):
 
 Used by: Discovery Lambda (via Bedrock tool use).
 
-The Discovery agent queries Postgres directly through a `psql` subprocess to check whether candidate projects/developers have already been featured. The `psql` binary is provided by the psql Lambda layer (see [Lambda Packaging & Deployment](./packaging-and-deployment.md)).
+The Discovery agent queries Postgres to check whether candidate projects/developers have already been featured. Uses `shared/db.py` with the `DB_CONNECTION_STRING` environment variable.
 
 **Tool definition for Bedrock:**
 
 ```json
 {
   "name": "query_postgres",
-  "description": "Run a read-only SQL query against the podcast database. Only SELECT statements are allowed. Returns rows as pipe-delimited text.",
+  "description": "Run a read-only SQL query against the podcast database. Only SELECT statements are allowed. Returns rows as JSON.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -293,21 +293,19 @@ The Discovery agent queries Postgres directly through a `psql` subprocess to che
 **Handler implementation:** When Bedrock returns a `tool_use` block for `query_postgres`, the handler:
 
 1. **Enforces read-only:** Checks that the SQL starts with `SELECT` (case-insensitive, after stripping whitespace). Rejects INSERT, UPDATE, DELETE, DROP, etc. with an error.
-2. **Fetches connection string:** From SSM Parameter Store at `/zerostars/db-connection-string` with `WithDecryption=True`. Cached in a module-level global across warm invocations.
-3. **Runs psql subprocess:**
+2. **Reads connection string:** From `os.environ["DB_CONNECTION_STRING"]`.
+3. **Executes query via `shared/db.py`:**
 
 ```python
-result = subprocess.run(
-    ["/opt/bin/psql", conn_str, "-c", sql, "--no-align", "--tuples-only", "--pset", "null=(null)"],
-    capture_output=True, text=True, timeout=15,
-)
+from shared.db import query
+
+rows = query(sql, statement_timeout_ms=15000)
 ```
 
-- `--no-align --tuples-only` strips headers and alignment, producing clean pipe-delimited output the model can parse.
-- `--pset null=(null)` renders NULL as literal `(null)` instead of empty string.
-- Timeout of 15 seconds prevents runaway queries from consuming the Lambda's 300s budget.
-- On psql error, returns `{"error": "<stderr truncated to 500 chars>"}`.
-- On success, returns `{"rows": "<stdout>"}`.
+- `statement_timeout` of 15 seconds prevents runaway queries from consuming the Lambda's 300s budget.
+- `shared/db.py` manages connection pooling and returns rows as a list of dicts (column names as keys).
+- On error, returns `{"error": "<message truncated to 500 chars>"}`.
+- On success, returns `{"rows": <list of row dicts>}`.
 
 ### Discovery GitHub Tool (`get_github_repo`)
 

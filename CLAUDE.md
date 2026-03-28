@@ -11,13 +11,14 @@ Project context and conventions for AI assistants working on this codebase.
 ## Repo Layout
 
 ```
-terraform/          Terraform IaC — all AWS resources
+terraform/          Terraform IaC — all AWS resources (lambdas.tf, mcp.tf, observability.tf, etc.)
 lambdas/            One directory per agent/function, each with handler.py and prompts/
 lambdas/shared/     Lambda Layer source — Bedrock client, DB helpers, S3 utils
+lambdas/mcp/        MCP control plane Lambda (26 tools, 5 resources) — tools/ subdirectory
 lambdas/site/       Dynamic website Lambda (Function URL + CloudFront)
 layers/ffmpeg/      ffmpeg binary packaged as a Lambda Layer
 sql/                Database schema definitions
-tests/              Unit and integration tests
+tests/              Unit (tests/unit/), integration (tests/integration/), and e2e (tests/e2e/)
 ```
 
 ## Hard Constraints

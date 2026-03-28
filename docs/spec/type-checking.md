@@ -212,29 +212,23 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from typing import Any
 
 import boto3
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from shared.bedrock import ToolDefinition, ToolExecutor, invoke_with_tools
+from shared.db import query as db_query
 from shared.logging import get_logger
 from shared.types import DiscoveryOutput, PipelineState
 
 logger = get_logger("discovery")
 
 # --- Module-level cached credentials ---
-_db_connection_string: str | None = None
 _exa_api_key: str | None = None
 
 # --- Tool definitions (module-level constant) ---
 TOOL_DEFINITIONS: list[ToolDefinition] = [...]  # populated per [External API Contracts](./external-api-contracts.md)
-
-
-def _get_db_connection_string() -> str:
-    """Fetch DB connection string from SSM, cached across warm starts."""
-    ...
 
 
 def _get_exa_api_key() -> str:
@@ -252,8 +246,8 @@ def _execute_exa_search(tool_input: dict[str, Any]) -> dict[str, Any]:
     ...
 
 
-def _execute_query_postgres(tool_input: dict[str, Any]) -> dict[str, str]:
-    """Run read-only SQL via psql subprocess. Returns {"rows": ...} or {"error": ...}."""
+def _execute_query_postgres(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Run read-only SQL via shared/db.py. Returns {"rows": ...} or {"error": ...}."""
     ...
 
 
@@ -280,11 +274,11 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOut
 **Key typing notes:**
 
 - `_execute_exa_search` returns `dict[str, Any]` because the Exa response contains nested lists of result objects with mixed-type values.
-- `_execute_query_postgres` returns `dict[str, str]` — always either `{"rows": "<stdout>"}` or `{"error": "<stderr>"}`. The narrower return type (vs `dict[str, Any]`) is intentional and passes strict checks.
+- `_execute_query_postgres` returns `dict[str, Any]` — either `{"rows": <list of row dicts>}` or `{"error": "<message>"}`. Uses `shared.db.query()` instead of subprocess.
 - `_execute_get_github_repo` returns `dict[str, Any]` because the curated GitHub response includes `str`, `int`, `list[str]`, and `None` values.
 - `_execute_tool` calls `json.dumps()` on the return value of the tool functions, so its return type is `str`.
 - `_parse_discovery_output` returns `DiscoveryOutput` (a TypedDict), which provides compile-time field validation at every call site.
-- The module-level globals `_db_connection_string` and `_exa_api_key` are typed as `str | None` and narrowed inside their getter functions via the `global` + `if is None` pattern.
+- The module-level global `_exa_api_key` is typed as `str | None` and narrowed inside its getter function via the `global` + `if is None` pattern. The DB connection string comes from `os.environ["DB_CONNECTION_STRING"]` via `shared/db.py`.
 - `TOOL_DEFINITIONS` is typed as `list[ToolDefinition]` (alias for `list[dict[str, Any]]`).
 
 ### Script Handler Internal Function Signatures
@@ -350,7 +344,7 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> ScriptOutput
 
 **Key typing notes:**
 
-- No `boto3` import — Script does not fetch secrets from SSM or Secrets Manager. It only calls Bedrock via the shared `invoke_model` function, which manages the boto3 client internally.
+- No `boto3` import — Script does not fetch secrets from Secrets Manager. It only calls Bedrock via the shared `invoke_model` function, which manages the boto3 client internally.
 - No `ToolDefinition`, `ToolExecutor`, or `_execute_tool` — Script has no Bedrock tools. It sends a single prompt and receives a single response.
 - `_build_user_message` returns `str` (plain text with section headers, not JSON). The function reads `event["discovery"]`, `event["research"]`, and optionally `event["producer"]` (when `event["metadata"]["script_attempt"] > 1`).
 - `_parse_script_output` returns `ScriptOutput` (TypedDict). It overwrites the `character_count` field with `len(data["text"])` rather than trusting the model's self-reported count, since LLMs frequently miscount characters. The actual length is then validated against `MAX_SCRIPT_CHARACTERS`.
@@ -382,8 +376,9 @@ MAX_SCRIPT_CHARACTERS: int = 5000
 BENCHMARK_QUERY: str = """
     SELECT e.script_text
     FROM episodes e
-    JOIN episode_metrics em ON e.episode_id = em.episode_id
-    ORDER BY (em.views + em.likes * 2 + em.comments * 3 + em.shares * 5) DESC
+    LEFT JOIN episode_metrics em ON e.episode_id = em.episode_id
+    ORDER BY COALESCE(em.views + em.likes * 2 + em.comments * 3 + em.shares * 5, 0) DESC,
+             e.created_at DESC
     LIMIT 3
 """
 
@@ -434,13 +429,13 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> ProducerOutp
 
 **Key typing notes:**
 
-- No `boto3` import — Producer does not fetch secrets from SSM or Secrets Manager. It accesses Postgres via the shared `db.query` function (which reads `DB_CONNECTION_STRING` from the environment) and calls Bedrock via `invoke_model` (which manages the boto3 client internally).
+- No `boto3` import — Producer does not fetch secrets from Secrets Manager. It accesses Postgres via the shared `db.query` function (which reads `DB_CONNECTION_STRING` from the environment) and calls Bedrock via `invoke_model` (which manages the boto3 client internally).
 - No `ToolDefinition`, `ToolExecutor`, or `_execute_tool` — Producer has no Bedrock tools. It sends a single prompt and receives a single response, identical to Script's pattern.
 - `_fetch_benchmark_scripts` returns `list[str]` — a list of raw `script_text` values from the database. Returns an empty list when no episodes exist (early pipeline runs) or if the query fails. The function wraps the `shared.db.query` call and handles exceptions internally rather than propagating them (benchmark absence should not crash the evaluation).
 - `_build_user_message` takes both `PipelineState` and `benchmarks: list[str]` because the benchmarks come from a separate DB query, not from the pipeline state. The function reads `event["script"]`, `event["discovery"]`, and `event["research"]`.
 - `_parse_producer_output` returns `ProducerOutput` (TypedDict with `NotRequired` fields). It validates `verdict` against the literal values `"PASS"` and `"FAIL"`, coerces `score` from string to int if needed, and enforces that FAIL verdicts contain both `feedback` and `issues` fields while PASS verdicts may optionally contain `notes`.
-- `BENCHMARK_QUERY` is typed as `str` (module-level constant). The engagement score formula weights metrics: views(1x) + likes(2x) + comments(3x) + shares(5x), reflecting the relative value of each engagement type.
-- No module-level credential caching is needed — the shared `db` module handles connection management, and `DB_CONNECTION_STRING` is an environment variable (not fetched from SSM at runtime like Discovery's connection string).
+- `BENCHMARK_QUERY` is typed as `str` (module-level constant). Uses `LEFT JOIN` + `COALESCE` so it returns scripts even when `episode_metrics` has no rows. When metrics exist, orders by engagement score: views(1x) + likes(2x) + comments(3x) + shares(5x). When metrics don't exist, falls back to most recent episodes by `created_at`.
+- No module-level credential caching is needed — the shared `db` module handles connection management, and `DB_CONNECTION_STRING` is an environment variable.
 
 ### Cover Art Handler Internal Function Signatures
 
@@ -560,5 +555,5 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> CoverArtOutp
 
 - Every function in shared modules (`bedrock.py`, `db.py`, `s3.py`, `logging.py`) must have full type annotations — parameters and return types.
 - No bare `Any` without an explicit `# type: ignore[...]` comment explaining why.
-- `boto3-stubs` (already in devcontainer) provides typed clients: `mypy_boto3_bedrock_runtime`, `mypy_boto3_s3`, `mypy_boto3_secretsmanager`, `mypy_boto3_ssm`. The `ssm` extra is needed for the Discovery handler's SSM `GetParameter` call.
+- `boto3-stubs` (already in devcontainer) provides typed clients: `mypy_boto3_bedrock_runtime`, `mypy_boto3_s3`, `mypy_boto3_secretsmanager`.
 - Use `from __future__ import annotations` at the top of every file for PEP 604 union syntax (`X | Y`) and forward references.

@@ -59,6 +59,8 @@ Runs a read-only SQL query against the podcast database. Use this to check which
 
 The database has these tables:
 
+> **Note:** This is an intentional simplification -- the full schema has more columns, but the Discovery agent only needs to know about columns relevant to its exclusion queries.
+
 ```sql
 -- All previously featured episodes
 episodes (
@@ -320,7 +322,7 @@ After completing your research, return the developer profile as a JSON object wi
 **Field requirements:**
 - `developer_name`: The `name` field from `get_github_user`. If null, use the `login` (username) instead.
 - `developer_github`: The GitHub username, exactly as provided in the input.
-- `developer_bio`: The `bio` field from `get_github_user`. If null, return an empty string `""` — do not return null or omit the field.
+- `developer_bio`: The `bio` field from `get_github_user`. If null, return an empty string `""` — do not return null or omit the field. (The Research handler defaults `developer_bio` to `""` when the GitHub API returns null for the bio field, so downstream consumers can always treat it as a string.)
 - `public_repos_count`: Integer from `get_github_user`'s `public_repos` field. Must be an integer, not a string.
 - `notable_repos`: Array of 2-5 repo objects. Always include the featured repo. Each object must have `name` (string), `description` (string — use empty string if null), `stars` (integer), and `language` (string — use "Unknown" if null). Sort by relevance to the developer's story, not by star count.
 - `commit_patterns`: A 1-3 sentence summary of the developer's activity. Reference specific observations.
@@ -562,6 +564,8 @@ Evaluate the script against these nine criteria. Each criterion is graded indivi
 The script text must be under 5,000 characters. The ElevenLabs API rejects inputs at or over this limit — automatic FAIL, no judgment needed.
 
 A script in the 4,000-4,500 range is ideal. A script at 4,900 is technically legal but close to the edge — note it but do not fail solely for being near the limit.
+
+> **Known gap:** `character_count` is self-reported by the Script agent. The Producer does not independently verify that it matches `len(text)`. If the Script agent reports an inaccurate count, the Producer evaluates based on the reported value. The Script handler does overwrite `character_count` with `len(text)` before returning, so in practice this only affects the Producer's evaluation of the raw model output.
 </criterion>
 
 <criterion name="segment_structure">
@@ -761,7 +765,7 @@ This prompt template is sent to AWS Bedrock Nova Canvas (`amazon.nova-canvas-v1:
 Bold cartoon podcast cover art, vibrant and energetic. Three robot characters in a studio: a bright enthusiastic robot with glowing eyes and raised arms, a monocled British robot with crossed arms and skeptical expression, a contemplative robot with a subtle head glow. They surround a microphone, reacting to a display showing {{visual_concept}}. Color palette: {{color_mood}}. Bold outlines, saturated colors, retro-futuristic aesthetic. Stylized illustration, no photorealism. Text: "0 STARS 10/10" in large bold block letters at top, "{{episode_subtitle}}" at bottom. All text must be extremely large and block-styled.
 ```
 
-**Nova Canvas `text` field limit: 1-1024 characters.** The base template is ~571 characters of fixed text, leaving ~453 characters for variable substitution. The handler must truncate the final prompt to 1024 characters if it exceeds the limit (truncation is preferable to an API error). The template is deliberately concise — Nova Canvas performs better with dense, descriptive prompts than with verbose instructions.
+**Nova Canvas `text` field limit: 1-1024 characters.** The base template is ~622 characters of fixed text, leaving ~402 characters of variable headroom against the 1,024-character Nova Canvas limit. The handler must truncate the final prompt to 1024 characters if it exceeds the limit (truncation is preferable to an API error). The template is deliberately concise — Nova Canvas performs better with dense, descriptive prompts than with verbose instructions.
 
 **Variable mapping:**
 

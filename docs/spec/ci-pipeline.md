@@ -30,8 +30,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install ruff mypy pytest pytest-cov "moto[s3]" boto3 \
-            psycopg2-binary jinja2 aws-lambda-powertools \
-            "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]"
+            psycopg2-binary==2.9.11 jinja2==3.1.6 aws-lambda-powertools==3.26.0 \
+            "mcp[cli]==1.26.0" \
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
 
       - uses: hashicorp/setup-terraform@v3
 
@@ -81,8 +82,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pytest boto3 psycopg2-binary aws-lambda-powertools \
-            "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]"
+          pip install pytest boto3 psycopg2-binary==2.9.11 aws-lambda-powertools==3.26.0 \
+            "boto3-stubs[bedrock-runtime,s3,secretsmanager]"
 
       - name: Integration tests
         run: pytest tests/integration/ -v -m integration

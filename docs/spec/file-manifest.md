@@ -18,7 +18,9 @@ Every file below must be created. No other files should be created.
 │   ├── step-functions.tf
 │   ├── s3.tf
 │   ├── site.tf
-│   └── secrets.tf
+│   ├── secrets.tf
+│   ├── observability.tf
+│   └── mcp.tf
 ├── lambdas/
 │   ├── shared/
 │   │   ├── build.sh
@@ -64,12 +66,19 @@ Every file below must be created. No other files should be created.
 │   │       └── index.html
 │   └── mcp/
 │       ├── handler.py
-│       └── build.sh
+│       ├── build.sh
+│       ├── resources.py
+│       └── tools/
+│           ├── __init__.py
+│           ├── pipeline.py
+│           ├── agents.py
+│           ├── observation.py
+│           ├── data.py
+│           ├── assets.py
+│           └── site.py
 ├── layers/
 │   ├── ffmpeg/
 │   │   └── build.sh
-│   └── psql/
-│       └── build.sh
 ├── sql/
 │   └── schema.sql
 ├── tests/
@@ -85,19 +94,41 @@ Every file below must be created. No other files should be created.
 │   │   ├── test_tts.py
 │   │   ├── test_post_production.py
 │   │   ├── test_site.py
-│   │   └── test_shared/
+│   │   ├── test_shared/
+│   │   │   ├── __init__.py
+│   │   │   ├── test_bedrock.py
+│   │   │   ├── test_db.py
+│   │   │   └── test_s3.py
+│   │   └── test_mcp/
 │   │       ├── __init__.py
-│   │       ├── test_bedrock.py
-│   │       ├── test_db.py
-│   │       └── test_s3.py
-│   └── integration/
+│   │       ├── conftest.py
+│   │       ├── test_pipeline.py
+│   │       ├── test_agents.py
+│   │       ├── test_observation.py
+│   │       ├── test_data.py
+│   │       ├── test_assets.py
+│   │       ├── test_site.py
+│   │       ├── test_resources.py
+│   │       └── test_handler.py
+│   ├── integration/
+│   │   ├── __init__.py
+│   │   ├── test_packaging.py
+│   │   ├── test_bedrock_live.py
+│   │   ├── test_discovery_live.py
+│   │   ├── test_research_live.py
+│   │   ├── test_s3_live.py
+│   │   ├── test_db_live.py
+│   │   ├── test_mcp_pipeline_live.py
+│   │   ├── test_mcp_data_live.py
+│   │   └── test_mcp_assets_live.py
+│   └── e2e/
 │       ├── __init__.py
-│       ├── test_packaging.py
-│       ├── test_bedrock_live.py
-│       ├── test_discovery_live.py
 │       ├── test_discovery_e2e.py
-│       ├── test_s3_live.py
-│       └── test_db_live.py
+│       ├── test_research_e2e.py
+│       ├── test_script_e2e.py
+│       ├── test_producer_e2e.py
+│       ├── test_cover_art_e2e.py
+│       └── test_mcp_e2e.py
 └── README.md
 ```
 
@@ -106,14 +137,15 @@ Every file below must be created. No other files should be created.
 | File | Contents |
 |------|----------|
 | `terraform/main.tf` | AWS provider configuration, Terraform backend (local state), common data sources (AWS account ID, region) |
-| `terraform/variables.tf` | Input variables: `elevenlabs_api_key`, `exa_api_key`, `db_connection_string`, `domain_name` |
-| `terraform/outputs.tf` | Exports: state machine ARN, site URL, S3 bucket name |
-| `terraform/lambdas.tf` | All 8 Lambda functions (7 pipeline + 1 site), their IAM roles and policies, CloudWatch log groups, `archive_file` data sources for deployment packages, shared Lambda Layer resource, ffmpeg Lambda Layer resource, psql Lambda Layer resource. No modules — every Lambda defined inline. |
+| `terraform/variables.tf` | Input variables: `elevenlabs_api_key`, `exa_api_key`, `db_connection_string`, `domain_name`, `project_prefix`, `alert_email`, `mcp_allowed_principal`, alarm thresholds. See [Terraform Resource Map](./terraform-resource-map.md). |
+| `terraform/outputs.tf` | Exports: state machine ARN, site URL, S3 bucket name, MCP Function URL |
+| `terraform/lambdas.tf` | 8 Lambda functions (7 pipeline + 1 site), their IAM roles and policies, CloudWatch log groups, `archive_file` data sources for deployment packages, shared Lambda Layer resource, ffmpeg Lambda Layer resource. No modules — every Lambda defined inline. |
 | `terraform/step-functions.tf` | Step Functions state machine with inline ASL via `jsonencode()`. IAM execution role for Step Functions (permission to invoke pipeline Lambdas). |
 | `terraform/s3.tf` | S3 bucket for episode assets (MP3, MP4, cover art PNGs). Bucket policy for CloudFront access. |
 | `terraform/site.tf` | Site Lambda function URL, CloudFront distribution (two origins: Function URL for HTML, S3 via OAC for cover art at `/assets/*`; ~1 hour TTL), Route53 A record for `podcast.ryans-lab.click` |
 | `terraform/secrets.tf` | `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version` for ElevenLabs and Exa API keys |
 | `terraform/observability.tf` | CloudWatch Alarms (pipeline-level, per-Lambda, custom metric) and SNS topic for alert notifications. See [Observability](./observability.md). |
+| `terraform/mcp.tf` | MCP Lambda function, IAM role/policy, Function URL, log group, invoke permission. See [MCP Server](./mcp-server.md). |
 
 ### Lambda Source Files
 
@@ -139,7 +171,15 @@ Every file below must be created. No other files should be created.
 | `lambdas/cover_art/prompts/cover_art.md` | Prompt template for Nova Canvas. Three robot personas, visual reference to featured project, "0 STARS / 10/10" title, episode subtitle. |
 | `lambdas/tts/handler.py` | TTS handler. Parses the approved script into dialogue turns. Calls ElevenLabs `/v1/text-to-dialogue` API. Uploads MP3 to S3. |
 | `lambdas/post_production/handler.py` | Post-production. Downloads cover art PNG and MP3 from S3. Runs ffmpeg to produce MP4. Uploads MP4 to S3. Writes episode record to Postgres `episodes` table. Writes to `featured_developers` table. |
-| `lambdas/mcp/handler.py` | MCP server handler. Exposes pipeline control tools (trigger run, check status) via Streamable HTTP transport. See [MCP Server](./mcp-server.md). |
+| `lambdas/mcp/handler.py` | MCP server Lambda entry point. Streamable HTTP transport. See [MCP Server](./mcp-server.md). |
+| `lambdas/mcp/resources.py` | MCP resource handlers (pipeline status, recent episodes, etc.). |
+| `lambdas/mcp/tools/__init__.py` | Package init for MCP tools. |
+| `lambdas/mcp/tools/pipeline.py` | Pipeline control tools: `start_pipeline`, `stop_pipeline`, `get_execution_status`, `list_executions`, `retry_from_step`. |
+| `lambdas/mcp/tools/agents.py` | Agent invocation tools: `invoke_discovery` through `invoke_post_production` (7 tools). |
+| `lambdas/mcp/tools/observation.py` | Observation tools: `get_agent_logs`, `get_execution_history`, `get_pipeline_health`. |
+| `lambdas/mcp/tools/data.py` | Data query tools: `query_episodes`, `get_episode_detail`, `query_metrics`, `query_featured_developers`, `run_sql`, `upsert_metrics`. |
+| `lambdas/mcp/tools/assets.py` | Asset management tools: `get_episode_assets`, `list_s3_assets`, `get_presigned_url`. |
+| `lambdas/mcp/tools/site.py` | Site management tools: `invalidate_cache`, `get_site_status`. |
 | `lambdas/site/handler.py` | Website handler. Queries `episodes` table from Postgres. Renders Jinja2 templates. Returns HTML response. Handles Lambda Function URL event format. |
 | `lambdas/site/templates/base.html` | Base HTML template. Minimal styling (inline CSS, no external dependencies). Dark theme. Includes `<head>`, nav with podcast title, footer. |
 | `lambdas/site/templates/index.html` | Extends base. Lists episodes reverse-chronologically. Each episode shows: title (repo name), developer name, air date, star count at recording, embedded HTML5 audio player (presigned S3 URL for MP3), cover art image. |
@@ -167,13 +207,30 @@ Every file below must be created. No other files should be created.
 | `tests/unit/test_shared/test_bedrock.py` | Unit tests for shared Bedrock client wrapper. |
 | `tests/unit/test_shared/test_db.py` | Unit tests for shared Postgres helper. |
 | `tests/unit/test_shared/test_s3.py` | Unit tests for shared S3 helper. |
-| `tests/integration/test_packaging.py` | Integration tests validating build artifacts: shared layer zip structure and contents, ffmpeg layer binary, psql layer binary + libpq, combined layer sizes within Lambda's 250 MB limit. Requires build scripts to be run first. See [Packaging & Deployment](./packaging-and-deployment.md). |
+| `tests/unit/test_mcp/conftest.py` | MCP test fixtures: `mcp_env`, mock clients for Step Functions, Lambda, S3, CloudFront, etc. See [Testing — MCP](./testing-mcp.md). |
+| `tests/unit/test_mcp/test_pipeline.py` | Unit tests for MCP pipeline control tools. |
+| `tests/unit/test_mcp/test_agents.py` | Unit tests for MCP agent invocation tools. |
+| `tests/unit/test_mcp/test_observation.py` | Unit tests for MCP observation tools. |
+| `tests/unit/test_mcp/test_data.py` | Unit tests for MCP data query tools. |
+| `tests/unit/test_mcp/test_assets.py` | Unit tests for MCP asset management tools. |
+| `tests/unit/test_mcp/test_site.py` | Unit tests for MCP site management tools. |
+| `tests/unit/test_mcp/test_resources.py` | Unit tests for MCP resource handlers. |
+| `tests/unit/test_mcp/test_handler.py` | Unit tests for MCP Lambda handler and transport layer. |
+| `tests/integration/test_packaging.py` | Integration tests validating build artifacts: shared layer zip structure and contents, ffmpeg layer binary, combined layer sizes within Lambda's 250 MB limit. Requires build scripts to be run first. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `tests/integration/test_bedrock_live.py` | Integration tests hitting real Bedrock. Marked `@pytest.mark.integration`. |
 | `tests/integration/test_s3_live.py` | Integration tests hitting real S3. Marked `@pytest.mark.integration`. |
-| `tests/integration/test_discovery_live.py` | Integration tests for Discovery external deps (psql, SSM, GitHub API). Marked `@pytest.mark.integration`. |
-| `tests/integration/test_discovery_e2e.py` | End-to-end test: invokes Discovery handler with real Bedrock, Exa, psql, GitHub. Marked `@pytest.mark.integration`, skipped by default. |
-| `tests/e2e/test_cover_art_e2e.py` | End-to-end test: invokes Cover Art handler with real Bedrock Nova Canvas and S3. Marked `@pytest.mark.e2e`, skipped by default. |
+| `tests/integration/test_discovery_live.py` | Integration tests for Discovery external deps (database, GitHub API). Marked `@pytest.mark.integration`. |
+| `tests/integration/test_research_live.py` | Integration tests for Research external deps (GitHub API). Marked `@pytest.mark.integration`. |
 | `tests/integration/test_db_live.py` | Integration tests hitting real Postgres. Marked `@pytest.mark.integration`. |
+| `tests/integration/test_mcp_pipeline_live.py` | Integration tests for MCP pipeline tools against real Step Functions. Marked `@pytest.mark.integration`. |
+| `tests/integration/test_mcp_data_live.py` | Integration tests for MCP data tools against real Postgres. Marked `@pytest.mark.integration`. |
+| `tests/integration/test_mcp_assets_live.py` | Integration tests for MCP asset tools against real S3. Marked `@pytest.mark.integration`. |
+| `tests/e2e/test_discovery_e2e.py` | End-to-end test: invokes Discovery handler with real Bedrock, Exa, DB, GitHub. Marked `@pytest.mark.e2e`, skipped by default. |
+| `tests/e2e/test_research_e2e.py` | End-to-end test: invokes Research handler with real Bedrock and GitHub. Marked `@pytest.mark.e2e`. |
+| `tests/e2e/test_script_e2e.py` | End-to-end test: invokes Script handler with real Bedrock. Marked `@pytest.mark.e2e`. |
+| `tests/e2e/test_producer_e2e.py` | End-to-end test: invokes Producer handler with real Bedrock and DB. Marked `@pytest.mark.e2e`. |
+| `tests/e2e/test_cover_art_e2e.py` | End-to-end test: invokes Cover Art handler with real Bedrock Nova Canvas and S3. Marked `@pytest.mark.e2e`. |
+| `tests/e2e/test_mcp_e2e.py` | End-to-end test: invokes MCP handler with real AWS services. Marked `@pytest.mark.e2e`. |
 
 ### Other Files
 
@@ -184,5 +241,4 @@ Every file below must be created. No other files should be created.
 | `lambdas/site/build.sh` | Shell script that pip-installs `jinja2` (pinned version) into the site Lambda directory. Run before `terraform plan` (or via `build-all.sh`). See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `lambdas/mcp/build.sh` | Shell script that pip-installs `mcp[cli]` (pinned version, targeting `manylinux2014_x86_64`) into the MCP Lambda directory. Run before `terraform plan` (or via `build-all.sh`). See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `build-all.sh` | Top-level build orchestration script. Runs all layer builds and Lambda pip installs in parallel. Run before `terraform plan`. See [Packaging & Deployment](./packaging-and-deployment.md). |
-| `layers/psql/build.sh` | Shell script that downloads PostgreSQL 16 RPMs for RHEL 9 (AL2023-compatible), extracts the `psql` binary and `libpq` shared library, and packages them as a Lambda Layer. Output: `layers/psql/psql-layer.zip`. Run once manually before `terraform apply`. See [Packaging & Deployment](./packaging-and-deployment.md). |
 | `README.md` | Project README. Already exists — no changes needed during implementation. |

@@ -91,7 +91,6 @@ PYTHONPATH=lambdas/shared/python pytest -v --cov=lambdas --cov-report=term-missi
 
 ```python
 import json
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -151,8 +150,7 @@ def mock_db_connection():
     """Patches psycopg2.connect in shared/db.py.
 
     Used by handlers that access Postgres via the shared db module
-    (Post-Production, Site). NOT used by Discovery — Discovery
-    uses psql subprocess, not psycopg2. See mock_subprocess fixture.
+    (Discovery, Producer, Post-Production, Site).
     """
     with patch("shared.db.psycopg2.connect") as mock:
         conn = MagicMock()
@@ -160,23 +158,6 @@ def mock_db_connection():
         conn.cursor.return_value = cursor
         mock.return_value = conn
         yield conn
-
-
-@pytest.fixture
-def mock_ssm():
-    """Patches boto3 SSM client for Discovery handler's _get_db_connection_string.
-
-    Returns a mock SSM client whose get_parameter returns a test connection string.
-    Also resets the module-level _db_connection_string cache to None.
-    """
-    with patch("lambdas.discovery.handler.boto3") as mock_boto3:
-        ssm_client = MagicMock()
-        ssm_client.get_parameter.return_value = {
-            "Parameter": {"Value": "postgresql://test:test@localhost:5432/zerostars?sslmode=require"}
-        }
-        mock_boto3.client.return_value = ssm_client
-        with patch("lambdas.discovery.handler._db_connection_string", None):
-            yield ssm_client
 
 
 @pytest.fixture
@@ -192,20 +173,6 @@ def mock_secrets_manager():
         mock_boto3.client.return_value = sm_client
         with patch("lambdas.discovery.handler._exa_api_key", None):
             yield sm_client
-
-
-@pytest.fixture
-def mock_subprocess():
-    """Patches subprocess.run for Discovery handler's _execute_query_postgres.
-
-    Usage:
-        def test_psql_select(mock_subprocess):
-            mock_subprocess.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="row1\nrow2\n", stderr=""
-            )
-    """
-    with patch("lambdas.discovery.handler.subprocess.run") as mock:
-        yield mock
 
 
 @pytest.fixture
@@ -504,9 +471,8 @@ def mock_cover_art_prompt_template():
 | S3 | `moto` `@mock_aws` decorator — creates in-memory S3. | Real S3 bucket in dev account with `test/` key prefix. |
 | S3 (Cover Art upload) | `unittest.mock` — patch `upload_bytes` at `lambdas.cover_art.handler.upload_bytes`. | Real S3 bucket (tested transitively via E2E). |
 | Postgres (shared/db.py) | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
-| Postgres (Discovery/psql) | `unittest.mock` — patch `subprocess.run` in `lambdas.discovery.handler`. | Real psql against dev RDS (see Discovery integration tests). |
+| Postgres (Discovery) | `unittest.mock` — patch `shared.db.query` at `lambdas.discovery.handler.query`. | Real dev RDS instance (see Discovery integration tests). |
 | Postgres (Producer/shared.db) | `unittest.mock` — patch `shared.db.query` at `lambdas.producer.handler.query`. | Real dev RDS instance (see `test_producer_db_benchmark_query` integration test). |
-| SSM Parameter Store | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_parameter` return value. Reset module-level `_db_connection_string` cache. | Real SSM parameter `/zerostars/db-connection-string` in dev account. |
 | Secrets Manager (Exa key) | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_secret_value` return value. Reset module-level `_exa_api_key` cache. | Skip — uses real secret, tested transitively via E2E. |
 | Exa API | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per query. |
 | ElevenLabs | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per call. |
@@ -586,67 +552,63 @@ def test_parse_rejects_invalid_json():
         _parse_discovery_output("this is not json at all")
 ```
 
-#### psql Tool Tests
+#### Database Query Tool Tests
 
 ```python
-import subprocess
+from unittest.mock import patch
 
-def test_psql_select_allowed(mock_subprocess, mock_ssm):
+def test_psql_select_allowed(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
-    mock_subprocess.return_value = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout="user1\nuser2\n", stderr=""
-    )
+    mock_db_connection.cursor.return_value.fetchall.return_value = [("user1",), ("user2",)]
     result = _execute_query_postgres({"sql": "SELECT developer_github FROM featured_developers;"})
     assert "rows" in result
-    assert "user1" in result["rows"]
+    assert "user1" in result["rows"][0]
 
 
-def test_psql_rejects_insert(mock_ssm):
+def test_psql_rejects_insert():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "INSERT INTO episodes VALUES (1, 'x');"})
     assert "error" in result
 
 
-def test_psql_rejects_delete(mock_ssm):
+def test_psql_rejects_delete():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "DELETE FROM episodes;"})
     assert "error" in result
 
 
-def test_psql_rejects_drop(mock_ssm):
+def test_psql_rejects_drop():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "DROP TABLE episodes;"})
     assert "error" in result
 
 
-def test_psql_rejects_update(mock_ssm):
+def test_psql_rejects_update():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "UPDATE episodes SET repo_name = 'x';"})
     assert "error" in result
 
 
-def test_psql_leading_whitespace_select(mock_subprocess, mock_ssm):
+def test_psql_leading_whitespace_select(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
-    mock_subprocess.return_value = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout="ok\n", stderr=""
-    )
+    mock_db_connection.cursor.return_value.fetchall.return_value = [("ok",)]
     result = _execute_query_postgres({"sql": "   SELECT 1;"})
     assert "rows" in result
 
 
-def test_psql_error_returns_stderr(mock_subprocess, mock_ssm):
+def test_psql_error_returns_stderr(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
-    mock_subprocess.return_value = subprocess.CompletedProcess(
-        args=[], returncode=1, stdout="", stderr="ERROR: relation does not exist"
-    )
+    from psycopg2 import OperationalError
+    mock_db_connection.cursor.return_value.execute.side_effect = OperationalError("relation does not exist")
     result = _execute_query_postgres({"sql": "SELECT * FROM nonexistent;"})
     assert "error" in result
     assert "relation" in result["error"]
 
 
-def test_psql_timeout_returns_error(mock_subprocess, mock_ssm):
+def test_psql_timeout_returns_error(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
-    mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd="psql", timeout=15)
+    from psycopg2 import OperationalError
+    mock_db_connection.cursor.return_value.execute.side_effect = OperationalError("query timeout")
     result = _execute_query_postgres({"sql": "SELECT pg_sleep(999);"})
     assert "error" in result
 ```
@@ -2555,35 +2517,22 @@ These verify that Discovery's external dependencies are reachable and return exp
 
 ```python
 import json
-import subprocess
+import os
 
-import boto3
 import pytest
 
 
 @pytest.mark.integration
-def test_psql_connects_to_zerostars_db():
-    """psql can connect to the real zerostars database and query featured_developers."""
-    ssm = boto3.client("ssm")
-    response = ssm.get_parameter(Name="/zerostars/db-connection-string", WithDecryption=True)
-    conn_str = response["Parameter"]["Value"]
+def test_db_connection_works():
+    """DB_CONNECTION_STRING env var connects successfully and can query featured_developers."""
+    from shared.db import query
 
-    result = subprocess.run(
-        ["psql", conn_str, "-c", "SELECT developer_github FROM featured_developers LIMIT 5;",
-         "--no-align", "--tuples-only"],
-        capture_output=True, text=True, timeout=15,
-    )
-    assert result.returncode == 0
-    assert "ERROR" not in result.stderr
+    conn_str = os.environ.get("DB_CONNECTION_STRING")
+    assert conn_str, "DB_CONNECTION_STRING environment variable is not set"
+    assert conn_str.startswith("postgresql://")
 
-
-@pytest.mark.integration
-def test_ssm_parameter_exists():
-    """SSM parameter /zerostars/db-connection-string exists and is a SecureString."""
-    ssm = boto3.client("ssm")
-    response = ssm.get_parameter(Name="/zerostars/db-connection-string", WithDecryption=True)
-    value = response["Parameter"]["Value"]
-    assert value.startswith("postgresql://")
+    rows = query("SELECT developer_github FROM featured_developers LIMIT 5;")
+    assert isinstance(rows, list)
 
 
 @pytest.mark.integration
@@ -2854,7 +2803,8 @@ class TestSharedLayerPackaging:
         with zipfile.ZipFile(self.ZIP_PATH) as zf:
             names = zf.namelist()
             for module in [
-                "__init__.py", "bedrock.py", "db.py", "s3.py", "logging.py", "types.py",
+                "__init__.py", "bedrock.py", "db.py", "s3.py", "logging.py",
+                "tracing.py", "metrics.py", "types.py",
             ]:
                 assert f"python/shared/{module}" in names, f"Missing python/shared/{module}"
 
@@ -2951,59 +2901,6 @@ class TestFfmpegLayerPackaging:
 
 
 @pytest.mark.integration
-class TestPsqlLayerPackaging:
-    """Validates the psql layer zip built by layers/psql/build.sh."""
-
-    ZIP_PATH = os.path.join(REPO_ROOT, "layers", "psql", "psql-layer.zip")
-
-    def test_psql_layer_zip_exists(self):
-        assert os.path.isfile(self.ZIP_PATH), (
-            f"psql layer zip not found at {self.ZIP_PATH}. "
-            "Run layers/psql/build.sh first."
-        )
-
-    def test_psql_layer_contains_binary(self):
-        with zipfile.ZipFile(self.ZIP_PATH) as zf:
-            assert "bin/psql" in zf.namelist(), "bin/psql not found in psql layer"
-
-    def test_psql_layer_contains_libpq(self):
-        with zipfile.ZipFile(self.ZIP_PATH) as zf:
-            libpq_files = [n for n in zf.namelist() if n.startswith("lib/libpq.so")]
-            assert len(libpq_files) > 0, "lib/libpq.so* not found in psql layer"
-
-    def test_psql_binary_is_executable(self):
-        with zipfile.ZipFile(self.ZIP_PATH) as zf:
-            info = zf.getinfo("bin/psql")
-            unix_mode = info.external_attr >> 16
-            assert unix_mode & 0o111, "bin/psql is not marked executable in zip"
-
-    def test_psql_binary_is_elf_x86_64(self):
-        """The psql binary must be a Linux x86_64 ELF executable."""
-        with zipfile.ZipFile(self.ZIP_PATH) as zf:
-            with zf.open("bin/psql") as f:
-                magic = f.read(20)
-        assert magic[:4] == b"\x7fELF", "bin/psql is not an ELF binary"
-        assert magic[4] == 2, "bin/psql is not a 64-bit binary"
-        machine = int.from_bytes(magic[18:20], "little")
-        assert machine == 0x3E, f"bin/psql architecture is {machine:#x}, expected 0x3e (x86_64)"
-
-    def test_psql_layer_only_contains_bin_and_lib(self):
-        """psql layer should only contain bin/ and lib/ directories."""
-        with zipfile.ZipFile(self.ZIP_PATH) as zf:
-            top_dirs = {n.split("/")[0] for n in zf.namelist() if "/" in n}
-            assert top_dirs == {"bin", "lib"}, f"Unexpected top-level dirs: {top_dirs}"
-
-    def test_psql_layer_unzipped_size_under_15mb(self):
-        """psql + libpq should be well under 15 MB."""
-        with zipfile.ZipFile(self.ZIP_PATH) as zf:
-            total = sum(info.file_size for info in zf.infolist())
-        max_bytes = 15 * 1024 * 1024
-        assert total < max_bytes, (
-            f"psql layer unzipped size {total / 1024 / 1024:.1f} MB exceeds 15 MB"
-        )
-
-
-@pytest.mark.integration
 class TestCombinedLayerSizes:
     """Validates that layer combinations stay within Lambda's 250 MB unzipped limit.
 
@@ -3033,13 +2930,10 @@ class TestCombinedLayerSizes:
         )
 
     def test_discovery_layers_under_250mb(self):
-        """Discovery uses shared + psql."""
+        """Discovery uses shared layer only."""
         shared = self._unzipped_size(os.path.join(REPO_ROOT, "build", "shared-layer.zip"))
-        psql = self._unzipped_size(
-            os.path.join(REPO_ROOT, "layers", "psql", "psql-layer.zip")
-        )
         handler_estimate = 50 * 1024  # handler.py + prompts/
-        total = shared + psql + handler_estimate
+        total = shared + handler_estimate
         limit = 250 * 1024 * 1024
         assert total < limit, (
             f"Discovery total {total / 1024 / 1024:.1f} MB "
@@ -3053,7 +2947,6 @@ Run these tests after building all layers:
 # Build all artifacts first
 lambdas/shared/build.sh
 layers/ffmpeg/build.sh
-layers/psql/build.sh
 
 # Run packaging validation
 pytest tests/integration/test_packaging.py -v -m integration
@@ -3071,14 +2964,13 @@ E2E tests live in `tests/e2e/` and use the `@pytest.mark.e2e` marker.
 import json
 import os
 
-import boto3
 import pytest
 
 
 @pytest.mark.e2e
 @pytest.mark.skip(reason="E2E: costs money (Bedrock + Exa). Run manually: pytest tests/e2e/test_discovery_e2e.py -v -m e2e --override-ini='addopts='")
 def test_discovery_e2e_produces_valid_output():
-    """Invoke Discovery handler with real Bedrock, psql, Exa, and GitHub API.
+    """Invoke Discovery handler with real Bedrock, DB, Exa, and GitHub API.
 
     Verifies:
     1. Output is valid DiscoveryOutput with all 9 required fields
@@ -3086,7 +2978,6 @@ def test_discovery_e2e_produces_valid_output():
     3. repo_url starts with https://github.com/
     4. Selected developer is not in featured_developers table
     """
-    import subprocess
     from unittest.mock import MagicMock
 
     # Set LAMBDA_TASK_ROOT so the handler can find prompts/discovery.md
@@ -3123,17 +3014,13 @@ def test_discovery_e2e_produces_valid_output():
     assert result["repo_url"].startswith("https://github.com/")
 
     # Verify developer is not already featured
-    ssm = boto3.client("ssm")
-    conn_str = ssm.get_parameter(
-        Name="/zerostars/db-connection-string", WithDecryption=True
-    )["Parameter"]["Value"]
-    check = subprocess.run(
-        ["psql", conn_str, "-c",
-         f"SELECT developer_github FROM featured_developers WHERE developer_github = '{result['developer_github']}';",
-         "--no-align", "--tuples-only"],
-        capture_output=True, text=True, timeout=15,
+    from shared.db import query
+
+    rows = query(
+        "SELECT developer_github FROM featured_developers WHERE developer_github = %s;",
+        (result["developer_github"],),
     )
-    assert check.stdout.strip() == "", (
+    assert len(rows) == 0, (
         f"Developer {result['developer_github']} is already in featured_developers"
     )
 ```
@@ -3593,7 +3480,7 @@ Each handler's unit test file must verify:
 
 | Handler | Required test cases |
 |---------|-------------------|
-| Discovery | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); star_count >= 10 rejected; string star_count coerced to int; missing required field rejected; invalid repo_url rejected; invalid JSON rejected. **psql tool:** SELECT allowed; INSERT/DELETE/DROP/UPDATE each rejected; leading whitespace SELECT allowed; psql stderr returns error dict; subprocess timeout returns error dict. **GitHub tool:** curated fields returned (no extra fields); null license handled; HTTP error returns error dict. **Exa tool:** snake_case inputs mapped to camelCase in request body; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each tool name; unknown tool returns error dict. **Full handler:** returns valid DiscoveryOutput; passes 3 tools and executor to invoke_with_tools; rejects high star_count from agent; handles fenced output from agent. |
+| Discovery | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); star_count >= 10 rejected; string star_count coerced to int; missing required field rejected; invalid repo_url rejected; invalid JSON rejected. **Database query tool:** SELECT allowed; INSERT/DELETE/DROP/UPDATE each rejected; leading whitespace SELECT allowed; DB error returns error dict; query timeout returns error dict. **GitHub tool:** curated fields returned (no extra fields); null license handled; HTTP error returns error dict. **Exa tool:** snake_case inputs mapped to camelCase in request body; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each tool name; unknown tool returns error dict. **Full handler:** returns valid DiscoveryOutput; passes 3 tools and executor to invoke_with_tools; rejects high star_count from agent; handles fenced output from agent. |
 | Research | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); string `public_repos_count` coerced to int; null `developer_bio` coerced to empty string; missing required field rejected; invalid JSON rejected; `notable_repos` entry missing required sub-field rejected; empty `notable_repos` accepted. **`get_github_user` tool:** curated fields returned (login, name, bio, public_repos, followers, created_at, html_url — no extra fields like id, avatar_url); null name handled; null bio handled; HTTP error returns error dict; socket timeout returns error dict. **`get_user_repos` tool:** returns array of curated repo objects (name, description, stargazers_count, language, html_url, pushed_at, fork — no extra fields); HTTP error returns error dict. **`get_repo_details` tool:** curated fields returned (name, full_name, description, stargazers_count, forks_count, language, topics, created_at, updated_at, html_url — no extra fields); null description handled; HTTP error returns error dict. **`get_repo_readme` tool:** returns decoded content string (base64 decoded by tool); 404 (no README) returns error dict; HTTP error returns error dict. **`search_repositories` tool:** returns `total_count` and curated items array; HTTP error returns error dict. **Tool dispatcher:** routes to correct function for each of 5 tool names; unknown tool returns error dict. **Full handler:** returns valid ResearchOutput; passes 5 tools and executor to invoke_with_tools; reads `$.discovery.developer_github`, `$.discovery.repo_name`, and `$.discovery.repo_url` from input event; handles missing developer bio (null → empty string); handles user with zero repos (empty `notable_repos` valid); handles fenced output from agent; propagates RuntimeError from invoke_with_tools. |
 | Script | **Output parsing:** valid JSON; fenced JSON (` ```json ` and ` ``` `); `character_count` >= 5,000 rejected; string `character_count` coerced to int; inaccurate `character_count` overwritten with `len(text)`; missing required field rejected; invalid JSON rejected; wrong segments rejected; segments in wrong order rejected; text at 4,999 characters accepted; text at 5,000 characters rejected. **User message building:** includes discovery data (repo_name, language, technical_highlights); includes research data (developer_name, hiring_signals, interesting_findings); includes attempt number; omits producer feedback on first attempt; includes producer feedback and issues on retry (`script_attempt > 1`). **Full handler:** returns valid ScriptOutput; calls `invoke_model` (not `invoke_with_tools`) with no tools or tool_executor; user message contains discovery data; user message contains research data; first attempt has no feedback in message; retry includes producer feedback and all issues; handles fenced output from agent; raises ValueError on character count exceeded; raises ValueError/JSONDecodeError on invalid JSON from model; propagates RuntimeError from invoke_model. |
 | Producer | **Output parsing:** valid PASS JSON; valid FAIL JSON; fenced JSON (` ```json ` and ` ``` `); missing `verdict` rejected; missing `score` rejected; invalid `verdict` value (not "PASS" or "FAIL") rejected; FAIL missing `feedback` rejected; FAIL missing `issues` rejected; PASS with `notes` accepted; PASS without `notes` accepted; string `score` coerced to int; invalid JSON rejected. **User message building:** includes script text; includes character count; includes discovery `repo_name`; includes discovery `repo_description`; includes research `hiring_signals`; includes benchmark scripts when available; handles no benchmark scripts gracefully (no crash, no misleading benchmark section). **Full handler:** returns valid PASS ProducerOutput; returns valid FAIL ProducerOutput; calls `invoke_model` (not `invoke_with_tools`) with no tools or tool_executor; reads script, discovery, and research data from event and passes them in user message; queries database for benchmark scripts via `shared.db.query`; handles fenced output from agent; handles empty benchmark results (no episodes in DB); propagates RuntimeError from invoke_model. |
@@ -3601,9 +3488,11 @@ Each handler's unit test file must verify:
 | TTS | Output matches `TTSOutput` shape; correctly parses `**Hype:**`, `**Roast:**`, `**Phil:**` labels; raises exception on malformed script lines |
 | Post-Production | Output matches `PostProductionOutput` shape; writes to `episodes` table; writes to `featured_developers` table |
 | Site | Returns valid HTML with status 200; handles empty episodes table |
+
+> **Note:** Test code for TTS, Post-Production, and Site unit tests is left to the implementer. The requirements table above defines what must be tested; no e2e tests are defined for these handlers (the e2e suite covers Discovery, Research, Script, Producer, and Cover Art).
 | Shared: bedrock | **invoke_model:** returns parsed text from Bedrock response; passes correct body structure (`anthropic_version`, `max_tokens`, `system`, `messages`). **invoke_with_tools:** single turn with no tool use (`end_turn`) returns text; tool use loop (`tool_use` then `end_turn`) calls tool_executor and returns final text; multiple tool_use blocks in one turn calls tool_executor for each; max_turns exceeded raises RuntimeError; appends correct message structure (assistant with tool_use content, then user with tool_result). **Retry:** retries on ThrottlingException with backoff; raises after max retries exhausted. |
 | Shared: db | `query` returns rows; `execute` returns rowcount; connection uses `sslmode=require` |
 | Shared: s3 | `upload_bytes` calls S3 `put_object`; `generate_presigned_url` returns valid URL |
 | MCP Server | See [MCP Server Testing](./testing-mcp.md) — 26 tools, 5 resources, fixtures, integration, and E2E tests. |
-| Packaging | **Shared layer:** zip exists; contains `python/shared/*.py` (6 modules); contains `python/psycopg2/`; contains `python/aws_lambda_powertools/`; all entries under `python/`; unzipped < 50 MB. **ffmpeg layer:** zip exists; `bin/ffmpeg` present; executable bit set; ELF x86_64 binary; only `bin/` dir; unzipped < 100 MB. **psql layer:** zip exists; `bin/psql` present; `lib/libpq.so*` present; executable bit set; ELF x86_64 binary; only `bin/` + `lib/` dirs; unzipped < 15 MB. **Combined sizes:** post-production (shared + ffmpeg) < 250 MB; discovery (shared + psql) < 250 MB. |
+| Packaging | **Shared layer:** zip exists; contains `python/shared/*.py` (8 modules: `__init__`, `bedrock`, `db`, `s3`, `logging`, `tracing`, `metrics`, `types`); contains `python/psycopg2/`; contains `python/aws_lambda_powertools/`; all entries under `python/`; unzipped < 50 MB. **ffmpeg layer:** zip exists; `bin/ffmpeg` present; executable bit set; ELF x86_64 binary; only `bin/` dir; unzipped < 100 MB. **Combined sizes:** post-production (shared + ffmpeg) < 250 MB; discovery (shared) < 250 MB. |
 

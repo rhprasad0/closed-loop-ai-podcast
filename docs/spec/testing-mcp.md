@@ -55,6 +55,9 @@ def mcp_env(monkeypatch):
     monkeypatch.setenv("SITE_DOMAIN", SITE_DOMAIN)
     monkeypatch.setenv("POWERTOOLS_SERVICE_NAME", "mcp")
     monkeypatch.setenv("POWERTOOLS_LOG_LEVEL", "INFO")
+    monkeypatch.setenv("POWERTOOLS_METRICS_NAMESPACE", "ZeroStars")
+    monkeypatch.setenv("POWERTOOLS_TRACER_CAPTURE_RESPONSE", "false")
+    monkeypatch.setenv("DB_CONNECTION_STRING", "postgresql://test:test@localhost:5432/testdb")
 
 
 @pytest.fixture
@@ -1077,7 +1080,8 @@ def test_describe_execution_if_any_exist():
 #### Postgres (`tests/integration/test_mcp_data_live.py`)
 
 ```python
-import boto3
+import os
+
 import psycopg2
 import pytest
 
@@ -1085,10 +1089,7 @@ import pytest
 @pytest.mark.integration
 def test_query_episodes_table():
     """SELECT from episodes table succeeds and returns expected columns."""
-    ssm = boto3.client("ssm")
-    conn_str = ssm.get_parameter(
-        Name="/zerostars/db-connection-string", WithDecryption=True,
-    )["Parameter"]["Value"]
+    conn_str = os.environ["DB_CONNECTION_STRING"]
 
     conn = psycopg2.connect(conn_str)
     try:
@@ -1107,10 +1108,7 @@ def test_query_episodes_table():
 @pytest.mark.integration
 def test_query_featured_developers_table():
     """SELECT from featured_developers succeeds."""
-    ssm = boto3.client("ssm")
-    conn_str = ssm.get_parameter(
-        Name="/zerostars/db-connection-string", WithDecryption=True,
-    )["Parameter"]["Value"]
+    conn_str = os.environ["DB_CONNECTION_STRING"]
 
     conn = psycopg2.connect(conn_str)
     try:
@@ -1125,10 +1123,7 @@ def test_query_featured_developers_table():
 @pytest.mark.integration
 def test_statement_timeout_works():
     """Verify statement_timeout prevents long queries."""
-    ssm = boto3.client("ssm")
-    conn_str = ssm.get_parameter(
-        Name="/zerostars/db-connection-string", WithDecryption=True,
-    )["Parameter"]["Value"]
+    conn_str = os.environ["DB_CONNECTION_STRING"]
 
     conn = psycopg2.connect(conn_str)
     try:

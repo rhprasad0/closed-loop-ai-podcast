@@ -6,7 +6,7 @@ Each Lambda needs its dependencies available at runtime. This section specifies 
 
 ### Architecture & Constraints
 
-All Lambda functions and layers target **x86_64** (Lambda's default architecture). This applies to pip `--platform` flags, static binaries (ffmpeg, psql), and the `compatible_architectures` attribute on every `aws_lambda_layer_version` resource in Terraform.
+All Lambda functions and layers target **x86_64** (Lambda's default architecture). This applies to pip `--platform` flags, static binaries (ffmpeg), and the `compatible_architectures` attribute on every `aws_lambda_layer_version` resource in Terraform.
 
 Lambda limits that shape packaging decisions:
 
@@ -19,7 +19,7 @@ Layer attachment by function:
 
 | Lambda | Layers | Est. Unzipped Size |
 |--------|--------|--------------------|
-| Discovery | shared + psql | ~40 MB |
+| Discovery | shared | ~35 MB |
 | Research, Script, Producer, Cover Art | shared | ~35 MB |
 | TTS | shared | ~35 MB |
 | Post-Production | shared + ffmpeg | ~115 MB |
@@ -85,7 +85,7 @@ resource "aws_lambda_layer_version" "shared" {
 }
 ```
 
-The zip must exist before `terraform plan`. This is the same pattern used for the ffmpeg and psql layers.
+The zip must exist before `terraform plan`. This is the same pattern used for the ffmpeg layer.
 
 ### Site Lambda
 
@@ -132,7 +132,7 @@ The deployment package is just `handler.py` — all heavy lifting comes from lay
 
 Research, Script, Producer, and Cover Art only need `boto3` (pre-installed on Lambda) and the shared layer. No additional dependencies.
 
-Discovery additionally needs the **psql layer** (provides `/opt/bin/psql` and `/opt/lib/libpq.so*`) for the `query_postgres` tool, which runs SQL queries via subprocess. It uses `urllib.request` from stdlib for the Exa and GitHub API calls — no extra pip dependencies.
+Discovery only needs `boto3` (pre-installed on Lambda), the shared layer (which includes `psycopg2` for the `query_postgres` tool), and `urllib.request` from stdlib for the Exa and GitHub API calls — no extra pip dependencies.
 
 ### MCP Lambda
 
@@ -162,72 +162,6 @@ echo "Done: lambdas/mcp/ ready for terraform plan"
 ```
 
 See [MCP Server — Dependencies](./mcp-server.md#dependencies) for the full dependency rationale.
-
-### psql Layer
-
-Built by `layers/psql/build.sh`. Provides the `psql` binary and `libpq` shared library for Lambda (Amazon Linux 2023, x86_64). Used by the Discovery Lambda's `query_postgres` tool to run SQL queries via subprocess.
-
-Lambda extracts layers to `/opt`. The layer structure places `bin/psql` at `/opt/bin/psql` (in Lambda's default `PATH`) and `lib/libpq.so*` at `/opt/lib/` (in Lambda's default `LD_LIBRARY_PATH`). No additional environment configuration needed.
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Build a Lambda layer containing the psql binary for Amazon Linux 2023 (x86_64).
-# The binary and libpq are extracted from official PostgreSQL PGDG RPMs for RHEL 9,
-# which are binary-compatible with AL2023.
-#
-# Layer structure:
-#   bin/psql      -> /opt/bin/psql on Lambda (in default PATH)
-#   lib/libpq.so* -> /opt/lib/ on Lambda (in default LD_LIBRARY_PATH)
-
-OUTPUT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR=$(mktemp -d)
-POSTGRES_VERSION="16"
-AL2023_REPO="https://download.postgresql.org/pub/repos/yum/${POSTGRES_VERSION}/redhat/rhel-9-x86_64"
-
-echo "Downloading PostgreSQL ${POSTGRES_VERSION} RPMs for RHEL 9 (AL2023-compatible)..."
-
-# Download the psql binary RPM
-RPM_URL=$(curl -sL "${AL2023_REPO}/" \
-    | grep -oP "postgresql${POSTGRES_VERSION}-${POSTGRES_VERSION}\.[0-9.]+-[0-9]+PGDG\.rhel9\.x86_64\.rpm" \
-    | sort -V | tail -1)
-if [ -z "$RPM_URL" ]; then
-    echo "ERROR: Could not find PostgreSQL RPM in PGDG repo."
-    exit 1
-fi
-echo "  psql RPM: $RPM_URL"
-curl -sL "${AL2023_REPO}/${RPM_URL}" -o "$BUILD_DIR/postgresql.rpm"
-
-# Download the libpq shared library RPM
-LIBPQ_URL=$(curl -sL "${AL2023_REPO}/" \
-    | grep -oP "postgresql${POSTGRES_VERSION}-libs-${POSTGRES_VERSION}\.[0-9.]+-[0-9]+PGDG\.rhel9\.x86_64\.rpm" \
-    | sort -V | tail -1)
-if [ -z "$LIBPQ_URL" ]; then
-    echo "ERROR: Could not find PostgreSQL libs RPM in PGDG repo."
-    exit 1
-fi
-echo "  libpq RPM: $LIBPQ_URL"
-curl -sL "${AL2023_REPO}/${LIBPQ_URL}" -o "$BUILD_DIR/postgresql-libs.rpm"
-
-echo "Extracting RPMs..."
-cd "$BUILD_DIR"
-rpm2cpio postgresql.rpm | cpio -idmv 2>/dev/null
-rpm2cpio postgresql-libs.rpm | cpio -idmv 2>/dev/null
-
-echo "Packaging Lambda layer..."
-mkdir -p "$BUILD_DIR/layer/bin" "$BUILD_DIR/layer/lib"
-cp "$BUILD_DIR/usr/pgsql-${POSTGRES_VERSION}/bin/psql" "$BUILD_DIR/layer/bin/psql"
-cp "$BUILD_DIR/usr/pgsql-${POSTGRES_VERSION}/lib/"libpq.so* "$BUILD_DIR/layer/lib/"
-chmod +x "$BUILD_DIR/layer/bin/psql"
-
-cd "$BUILD_DIR/layer"
-zip -r "$OUTPUT_DIR/psql-layer.zip" .
-
-echo "Done: $OUTPUT_DIR/psql-layer.zip"
-echo "Layer size: $(du -h "$OUTPUT_DIR/psql-layer.zip" | cut -f1)"
-rm -rf "$BUILD_DIR"
-```
 
 ### ffmpeg Layer
 
@@ -264,7 +198,7 @@ rm -rf "$BUILD_DIR"
 
 ### Lambda Deployment Packages
 
-All 8 Lambda functions use Terraform's `data "archive_file"` to create their deployment zips — no manual `zip` commands needed. Terraform zips each Lambda's source directory at plan time and tracks changes via `source_code_hash`. See [Terraform Resource Map — lambdas.tf](./terraform-resource-map.md) for the full resource definitions.
+All 9 Lambda functions use Terraform's `data "archive_file"` to create their deployment zips — no manual `zip` commands needed. Terraform zips each Lambda's source directory at plan time and tracks changes via `source_code_hash`. See [Terraform Resource Map — lambdas.tf](./terraform-resource-map.md) for the full resource definitions.
 
 For Lambdas with pip dependencies (Site, MCP), run their `build.sh` scripts before `terraform plan` so the pip packages are present in the source directory when `archive_file` runs.
 
@@ -280,7 +214,7 @@ What each Lambda's `archive_file` captures:
 | TTS | `lambdas/tts/` | `handler.py` |
 | Post-Production | `lambdas/post_production/` | `handler.py` |
 | Site | `lambdas/site/` | `handler.py`, `templates/`, pip-installed jinja2 |
-| MCP | `lambdas/mcp/` | `handler.py`, pip-installed mcp[cli] |
+| MCP | `lambdas/mcp/` | `handler.py`, `tools/`, `resources.py`, pip-installed mcp[cli] |
 
 ### Build Artifacts & .gitignore
 
@@ -290,7 +224,6 @@ Build scripts output artifacts that must NOT be committed to git:
 |----------|-----------|------|
 | Shared layer zip | `lambdas/shared/build.sh` | `build/shared-layer.zip` |
 | ffmpeg layer zip | `layers/ffmpeg/build.sh` | `layers/ffmpeg/ffmpeg-layer.zip` |
-| psql layer zip | `layers/psql/build.sh` | `layers/psql/psql-layer.zip` |
 | Pip packages in shared layer | `lambdas/shared/build.sh` | `lambdas/shared/python/*` (except `shared/`) |
 | Pip packages in site Lambda | `lambdas/site/build.sh` | `lambdas/site/*` (except committed source) |
 | Pip packages in MCP Lambda | `lambdas/mcp/build.sh` | `lambdas/mcp/*` (except committed source) |
@@ -302,8 +235,6 @@ Required `.gitignore` entries:
 ```
 build/
 layers/ffmpeg/ffmpeg-layer.zip
-layers/psql/psql-layer.zip
-
 # Pip-installed packages in shared layer (source code in python/shared/ IS committed)
 lambdas/shared/python/*
 !lambdas/shared/python/shared/
@@ -314,10 +245,12 @@ lambdas/site/*
 !lambdas/site/build.sh
 !lambdas/site/templates/
 
-# Pip-installed packages in MCP Lambda (handler.py, build.sh ARE committed)
+# Pip-installed packages in MCP Lambda (handler.py, build.sh, tools/, resources.py ARE committed)
 lambdas/mcp/*
 !lambdas/mcp/handler.py
 !lambdas/mcp/build.sh
+!lambdas/mcp/tools/
+!lambdas/mcp/resources.py
 ```
 
 ### Dev Dependencies
@@ -326,7 +259,7 @@ These packages are needed in the development environment (devcontainer) but are 
 
 ```bash
 pip install pytest pytest-cov moto mypy ruff \
-    "boto3-stubs[bedrock-runtime,s3,secretsmanager,ssm]" \
+    "boto3-stubs[bedrock-runtime,s3,secretsmanager]" \
     aws-lambda-powertools
 ```
 
@@ -349,7 +282,6 @@ echo "=== Building layers and Lambda dependencies ==="
 
 # Step 1: Build layers and install Lambda pip deps (all independent — run in parallel)
 lambdas/shared/build.sh &
-layers/psql/build.sh &
 layers/ffmpeg/build.sh &
 lambdas/site/build.sh &
 lambdas/mcp/build.sh &
@@ -369,7 +301,6 @@ echo ""
 echo "=== Build complete ==="
 echo "Shared layer:  $(du -h build/shared-layer.zip 2>/dev/null | cut -f1 || echo 'MISSING')"
 echo "ffmpeg layer:  $(du -h layers/ffmpeg/ffmpeg-layer.zip 2>/dev/null | cut -f1 || echo 'MISSING')"
-echo "psql layer:    $(du -h layers/psql/psql-layer.zip 2>/dev/null | cut -f1 || echo 'MISSING')"
 echo ""
 echo "Ready for: cd terraform && terraform init && terraform apply"
 ```

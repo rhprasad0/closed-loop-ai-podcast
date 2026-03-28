@@ -9,6 +9,7 @@ The state machine definition as ASL (Amazon States Language). This gets placed i
 ```
 Start
   → InitializeMetadata (Pass — sets execution_id from $$.Execution.Id, script_attempt = 1)
+  → ResumeRouter (Choice — routes to resume_from step if set, otherwise Discovery)
   → Discovery
   → Research
   → Script
@@ -58,7 +59,20 @@ Lambda Resource ARNs are shown as `<discovery_lambda_arn>` etc. In Terraform's `
           "script_attempt": 1
         }
       },
-      "Next": "Discovery"
+      "Next": "ResumeRouter"
+    },
+    "ResumeRouter": {
+      "Type": "Choice",
+      "Comment": "Routes to a mid-pipeline step when resume_from is set (MCP retry_from_step). Normal executions fall through to Discovery via Default.",
+      "Choices": [
+        { "Variable": "$.metadata.resume_from", "StringEquals": "Research", "Next": "Research" },
+        { "Variable": "$.metadata.resume_from", "StringEquals": "Script", "Next": "Script" },
+        { "Variable": "$.metadata.resume_from", "StringEquals": "Producer", "Next": "Producer" },
+        { "Variable": "$.metadata.resume_from", "StringEquals": "CoverArt", "Next": "CoverArt" },
+        { "Variable": "$.metadata.resume_from", "StringEquals": "TTS", "Next": "TTS" },
+        { "Variable": "$.metadata.resume_from", "StringEquals": "PostProduction", "Next": "PostProduction" }
+      ],
+      "Default": "Discovery"
     },
     "Discovery": {
       "Type": "Task",

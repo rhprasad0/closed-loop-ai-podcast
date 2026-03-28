@@ -51,7 +51,7 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | ElevenLabs model | `eleven_v3` |
 | ElevenLabs output format | `mp3_44100_128` |
 | Discovery star threshold | Under 10 (hard ceiling, verified via GitHub API) |
-| SSM DB connection string path | `/zerostars/db-connection-string` (SecureString, already provisioned) |
+| DB connection string | `DB_CONNECTION_STRING` env var on all Lambdas that access Postgres (Discovery, Producer, Post-Production, Site, MCP) |
 | Script character limit | 5,000 (target 4,000–4,500) |
 | Max script retry attempts | 3 |
 | Tags | `project = "0-stars-podcast"`, `managed_by = "terraform"` |
@@ -59,6 +59,6 @@ Single source of truth for implementing the podcast pipeline. Each section is a 
 | Lambda `logging_config` log format | `JSON` |
 | Lambda `logging_config` system log level | `WARN` |
 | mypy mode | `strict` |
-| pytest markers | `integration` |
+| pytest markers | `integration`, `e2e` |
 | Ruff line length | 100 |
 | CI Python version | `3.12` |
