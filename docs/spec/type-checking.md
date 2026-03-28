@@ -152,7 +152,7 @@ The `invoke_with_tools` signature shown in [External API Contracts](./external-a
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 # The Bedrock Messages API tool definition schema. Each tool is a dict
 # with "name", "description", and "input_schema" keys. We use
@@ -167,6 +167,13 @@ ToolDefinition = dict[str, Any]  # type alias
 ToolExecutor = Callable[[str, dict[str, Any]], str]
 
 DEFAULT_MODEL_ID: str = "us.anthropic.claude-sonnet-4-6"
+MAX_TOKENS: int = 16384  # room for adaptive thinking at medium/high effort
+
+# Effort levels for Sonnet 4.6. "high" for agentic multi-turn (Discovery,
+# Research); "medium" for single-turn (Script, Producer).
+Effort = Literal["low", "medium", "high", "max"]
+DEFAULT_EFFORT_AGENTIC: Effort = "high"
+DEFAULT_EFFORT_SINGLE_TURN: Effort = "medium"
 
 
 def invoke_model(
@@ -174,6 +181,7 @@ def invoke_model(
     system_prompt: str,
     model_id: str = DEFAULT_MODEL_ID,
     max_tokens: int = MAX_TOKENS,
+    effort: Effort = DEFAULT_EFFORT_SINGLE_TURN,
 ) -> str: ...
 
 
@@ -185,6 +193,7 @@ def invoke_with_tools(
     model_id: str = DEFAULT_MODEL_ID,
     max_tokens: int = MAX_TOKENS,
     max_turns: int = 25,
+    effort: Effort = DEFAULT_EFFORT_AGENTIC,
 ) -> str: ...
 ```
 

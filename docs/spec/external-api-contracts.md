@@ -16,13 +16,20 @@ import json
 client = boto3.client("bedrock-runtime")
 
 # Basic invocation (Script, Producer)
+#
+# Sonnet 4.6 defaults to effort "high" if not set, which adds latency.
+# Script and Producer are single-turn calls where "medium" effort is
+# sufficient and faster. Set max_tokens high enough to leave room for
+# the model's internal thinking at medium/high effort.
 response = client.invoke_model(
     modelId="us.anthropic.claude-sonnet-4-6",
     contentType="application/json",
     accept="application/json",
     body=json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 4096,
+        "max_tokens": 16384,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "medium"},
         "system": system_prompt,
         "messages": [
             {"role": "user", "content": user_prompt}
@@ -30,7 +37,9 @@ response = client.invoke_model(
     })
 )
 result = json.loads(response["body"].read())
-text = result["content"][0]["text"]
+# With adaptive thinking, result["content"] may contain thinking blocks
+# followed by text blocks. Extract the last text block:
+text = next(b["text"] for b in reversed(result["content"]) if b["type"] == "text")
 
 # With tool use (Discovery, Research) — agentic loop via shared/bedrock.py
 #
@@ -81,14 +90,18 @@ result_text = invoke_with_tools(
 # so the agent sees errors and can adapt (retry, pick a different candidate).
 
 # The underlying Bedrock API call is invoke_model with the Anthropic
-# Messages API body format — tools array in the body, stop_reason in response:
+# Messages API body format — tools array in the body, stop_reason in response.
+# Discovery and Research are multi-turn agentic loops where "high" effort
+# improves tool-use decisions and reasoning quality.
 response = client.invoke_model(
     modelId="us.anthropic.claude-sonnet-4-6",
     contentType="application/json",
     accept="application/json",
     body=json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 4096,
+        "max_tokens": 16384,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
         "system": system_prompt,
         "messages": messages,
         "tools": tool_definitions
@@ -96,7 +109,7 @@ response = client.invoke_model(
 )
 result = json.loads(response["body"].read())
 # result["stop_reason"] is "tool_use" or "end_turn"
-# result["content"] contains text blocks and/or tool_use blocks
+# result["content"] may contain thinking, text, and/or tool_use blocks
 ```
 
 ### AWS Bedrock — Nova Canvas (Cover Art)
