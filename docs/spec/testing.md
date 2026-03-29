@@ -49,12 +49,13 @@ tests/
 │   └── test_research_live.py
 └── e2e/
     ├── __init__.py
-    ├── test_discovery_e2e.py
-    ├── test_research_e2e.py
-    ├── test_script_e2e.py
-    ├── test_producer_e2e.py
-    ├── test_cover_art_e2e.py
-    └── test_mcp_e2e.py
+    ├── conftest.py                       # Session fixtures, skip guards, cleanup
+    ├── helpers.py                        # Polling, assertion, MCP invocation utils
+    ├── test_pipeline_execution.py        # Full pipeline via Step Functions (10 tests)
+    ├── test_pipeline_artifacts.py        # S3 objects, DB records (6 tests)
+    ├── test_pipeline_control_flow.py     # Resume, stop, error paths (3 tests)
+    ├── test_mcp_tools.py                 # MCP Lambda invocation (7 tests)
+    └── test_site.py                      # CloudFront website (3 tests)
 ```
 
 **Naming convention:** `test_{lambda_name}.py` for handler tests, `test_{module}.py` for shared module tests. Test functions: `test_{behavior}_{scenario}` (e.g., `test_discovery_excludes_featured_developers`, `test_script_output_under_character_limit`).
@@ -70,7 +71,7 @@ python_files = "test_*.py"
 python_functions = "test_*"
 markers = [
     "integration: hits real AWS services (deselect with '-m not integration')",
-    "e2e: end-to-end tests that cost money (Bedrock, Exa, ElevenLabs). Run manually.",
+    "e2e: end-to-end tests against deployed infrastructure (Step Functions, Lambda, S3). Costs money. Run manually.",
 ]
 ```
 
@@ -3989,11 +3990,51 @@ pytest tests/integration/test_packaging.py -v -m integration
 
 ### End-to-End Tests
 
-End-to-end tests invoke a full Lambda handler locally with real external dependencies (real Bedrock, real API keys, real database). They verify that the entire handler path works — from input event through tool use to parsed output. E2E tests are expensive (Bedrock + Exa API calls) and slow (30-90 seconds per run), so they are run manually, not in CI.
+E2E tests verify **deployed infrastructure** works end-to-end — real Step Functions orchestration, real Lambda execution in containers with layers and env vars, real external API calls (Bedrock Sonnet, Nova Canvas, ElevenLabs, Exa, GitHub), real S3 and Postgres writes. E2E tests are expensive (~$1-5 per run) and slow (5-15 minutes), so they are run manually, not in CI.
 
 E2E tests live in `tests/e2e/` and use the `@pytest.mark.e2e` marker.
 
-#### Discovery E2E Test (`tests/e2e/test_discovery_e2e.py`)
+**Core design:** One pipeline execution per session, shared across all assertion tests. The pipeline runs once via a session-scoped `pipeline_execution` fixture; individual tests assert against the results.
+
+**Prerequisites:**
+- Infrastructure deployed via `terraform apply`
+- Environment variables: `STATE_MACHINE_ARN`, `S3_BUCKET`, `SITE_URL`, `DB_CONNECTION_STRING`
+- AWS credentials with permissions for Step Functions, Lambda, S3, RDS
+
+#### E2E Test Files
+
+| File | Tests | What It Validates |
+|------|-------|-------------------|
+| `test_pipeline_execution.py` | 10 | Step Functions orchestration, all 8 stage outputs (schema, types, cross-step contracts) |
+| `test_pipeline_artifacts.py` | 6 | S3 objects exist (PNG/MP3/MP4), DB records match pipeline state |
+| `test_pipeline_control_flow.py` | 3 | Resume-from-step, stop execution, error handling via HandleError→PipelineFailed |
+| `test_mcp_tools.py` | 7 | MCP Lambda full stack via `boto3 lambda.invoke()` with Function URL v2 events |
+| `test_site.py` | 3 | CloudFront website returns 200, 404, and lists the e2e episode |
+
+#### Running E2E Tests
+
+```bash
+# Source environment variables
+set -a && source .env && set +a
+
+# All e2e tests (~15 min, costs ~$1-5)
+PYTHONPATH=lambdas/shared/python pytest tests/e2e/ -m e2e -v --timeout=900
+
+# Pipeline only (cheapest — one execution shared across assertion tests)
+PYTHONPATH=lambdas/shared/python pytest tests/e2e/test_pipeline_execution.py tests/e2e/test_pipeline_artifacts.py -m e2e -v
+
+# Site only (free — no pipeline needed if episodes already exist)
+PYTHONPATH=lambdas/shared/python pytest tests/e2e/test_site.py -m e2e -v
+```
+
+#### Per-Handler Unit Test Requirements (reference)
+
+> The original per-handler e2e test code has been removed. That use case is now
+> covered by the integration chain tests (tests/integration/test_chain_*.py)
+> which exercise real Bedrock (Haiku) with behavioral twins for external APIs.
+> The e2e tier tests deployed infrastructure instead.
+
+#### Original Per-Handler E2E Tests (REMOVED)
 
 ```python
 import json

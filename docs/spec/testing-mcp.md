@@ -37,7 +37,7 @@ tests/
 │   ├── test_mcp_data_live.py       # Real Postgres queries
 │   └── test_mcp_assets_live.py     # Real S3 operations
 └── e2e/
-    └── test_mcp_e2e.py             # Full tool chain: start → observe → stop
+    └── test_mcp_tools.py           # MCP Lambda invocation via boto3 lambda.invoke()
 ```
 
 ### MCP Fixtures (`tests/unit/test_mcp/conftest.py`)
@@ -1364,9 +1364,13 @@ def test_generate_presigned_url():
     assert url.startswith("https://")
 ```
 
-### End-to-End Tests (`tests/e2e/test_mcp_e2e.py`)
+### End-to-End Tests (`tests/e2e/test_mcp_tools.py`)
 
-E2E tests exercise the full MCP tool chain against real AWS. They start a pipeline execution, observe it, and stop it before it consumes expensive resources (Bedrock, ElevenLabs). The Discovery agent is the first step and takes 30-60 seconds, so stopping during Discovery avoids most cost.
+E2E tests invoke the deployed MCP Lambda via `boto3.client("lambda").invoke()` with Lambda Function URL v2 event payloads containing MCP JSON-RPC bodies. This exercises the **full MCP stack**: Lambda handler → ASGI adapter → FastMCP server → tool registration → tool execution → AWS service calls.
+
+Tests depend on the session-scoped `pipeline_execution` fixture from `tests/e2e/conftest.py`, which runs a full pipeline via Step Functions. MCP tools are then queried to verify they can observe and query the pipeline results.
+
+> **Note:** The original `test_mcp_e2e.py` (which imported tool functions directly) has been replaced. The new approach tests the deployed Lambda end-to-end.
 
 ```python
 import json

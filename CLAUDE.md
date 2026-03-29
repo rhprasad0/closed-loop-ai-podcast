@@ -23,7 +23,7 @@ tests/              Unit (tests/unit/), integration (tests/integration/), and e2
 
 ## Implementation Status
 
-All production Lambda code is implemented. Unit tests: 297 passing across 21 test files. Integration and e2e test directories exist as stubs (`tests/integration/`, `tests/e2e/`) — not yet implemented.
+All production Lambda code is implemented. Unit tests: 297 passing across 21 test files. Integration tests: 8 test files using behavioral twins + real Bedrock (Haiku). E2E tests: 29 tests across 5 files — test deployed infrastructure via Step Functions, Lambda invoke, S3, and Postgres. E2E tests require deployed infrastructure and env vars (`STATE_MACHINE_ARN`, `S3_BUCKET`, `SITE_URL`, `DB_CONNECTION_STRING`).
 
 ## Hard Constraints
 
