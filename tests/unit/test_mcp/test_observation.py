@@ -8,8 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.unit.test_mcp.conftest import EXECUTION_ARN, STATE_MACHINE_ARN
-
+from tests.unit.test_mcp.conftest import EXECUTION_ARN
 
 # ---------------------------------------------------------------------------
 # get_agent_logs

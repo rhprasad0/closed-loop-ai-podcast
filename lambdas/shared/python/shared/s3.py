@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
+
 import boto3
 
 
-def _get_client():  # type: ignore[return]
+def _get_client() -> Any:
     return boto3.client("s3")
 
 

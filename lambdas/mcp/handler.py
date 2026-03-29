@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from types import SimpleNamespace
 from typing import Any
 
 from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from mcp.server.fastmcp import FastMCP
+from shared.logging import get_logger
+from shared.metrics import get_metrics
+from shared.tracing import get_tracer
 
 from . import resources as resources_module
 from .tools import agents as agents_tools
@@ -13,13 +19,6 @@ from .tools import data as data_tools
 from .tools import observation as observation_tools
 from .tools import pipeline as pipeline_tools
 from .tools import site as site_tools
-
-from types import SimpleNamespace
-
-from mcp.server.fastmcp import FastMCP
-from shared.logging import get_logger
-from shared.metrics import get_metrics
-from shared.tracing import get_tracer
 
 logger = get_logger("mcp")
 tracer = get_tracer("mcp")
@@ -116,24 +115,24 @@ def create_mcp_server() -> _MCPServer:
     # thin and ensures mock fixtures only need to patch the tool module paths.
 
     @server.resource("zerostars://episodes")
-    async def episodes_resource() -> str:
+    async def episodes_resource() -> list[dict[str, Any]]:
         return resources_module.read_episodes_resource()
 
     @server.resource("zerostars://episodes/{episode_id}")
-    async def episode_detail_resource(episode_id: str) -> str:
+    async def episode_detail_resource(episode_id: str) -> dict[str, Any]:
         # URI template variables arrive as strings; convert to int for the handler.
         return resources_module.read_episode_detail_resource(int(episode_id))
 
     @server.resource("zerostars://metrics")
-    async def metrics_resource() -> str:
+    async def metrics_resource() -> list[dict[str, Any]]:
         return resources_module.read_metrics_resource()
 
     @server.resource("zerostars://pipeline/status")
-    async def pipeline_status_resource() -> str:
+    async def pipeline_status_resource() -> dict[str, Any]:
         return resources_module.read_pipeline_status_resource()
 
     @server.resource("zerostars://featured-developers")
-    async def featured_developers_resource() -> str:
+    async def featured_developers_resource() -> list[dict[str, Any]]:
         return resources_module.read_featured_developers_resource()
 
     return _MCPServer(server)

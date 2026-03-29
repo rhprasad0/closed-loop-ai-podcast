@@ -12,7 +12,7 @@ from datetime import date, datetime
 from typing import Any, cast
 
 import shared.db as db
-from shared.db import get_connection
+from shared.db import get_connection as get_connection
 
 _VALID_EPISODE_ORDER_BY = {"created_at", "air_date", "episode_id", "star_count_at_recording"}
 _VALID_METRICS_ORDER_BY = {"views", "likes", "comments", "shares", "snapshot_date"}

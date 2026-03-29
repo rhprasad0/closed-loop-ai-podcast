@@ -10,7 +10,6 @@ import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a mock Lambda invoke response
 # ---------------------------------------------------------------------------

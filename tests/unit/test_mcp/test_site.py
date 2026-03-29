@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock, patch
 
-from tests.unit.test_mcp.conftest import CLOUDFRONT_DIST_ID, ACM_CERT_ARN, SITE_DOMAIN
+from tests.unit.test_mcp.conftest import ACM_CERT_ARN, CLOUDFRONT_DIST_ID, SITE_DOMAIN
 
 
 def test_invalidate_cache_default_paths(mock_site_boto3_clients):
