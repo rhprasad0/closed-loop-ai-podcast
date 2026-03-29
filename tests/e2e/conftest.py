@@ -112,7 +112,7 @@ def pipeline_execution(
 
     # Poll until completion
     try:
-        result = poll_execution(sfn_client, execution_arn, timeout=900, interval=15)
+        result = poll_execution(sfn_client, execution_arn, timeout=1800, interval=20)
     except TimeoutError:
         # If the execution timed out, abort it and yield a TIMED_OUT result
         sfn_client.stop_execution(

@@ -34,3 +34,4 @@ lambdas/mcp/*
 !lambdas/mcp/build.sh
 !lambdas/mcp/tools/
 !lambdas/mcp/resources.py
+terraform/tfplan

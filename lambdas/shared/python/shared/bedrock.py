@@ -6,15 +6,19 @@ import time
 from collections.abc import Callable
 from typing import Any, Literal
 
+import logging
+
 import boto3
 import botocore.exceptions
+
+logger = logging.getLogger(__name__)
 
 # ToolDefinition and ToolExecutor are exported so handler code can annotate callbacks.
 # dict[str, Any] is used because input_schema has recursive JSON Schema structure.
 ToolDefinition = dict[str, Any]
 ToolExecutor = Callable[[str, dict[str, Any]], str]
 
-DEFAULT_MODEL_ID: str = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+DEFAULT_MODEL_ID: str = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 MAX_TOKENS: int = 16384  # room for adaptive thinking at medium/high effort
 
 # Effort levels for Sonnet 4.6. "high" for agentic multi-turn (Discovery,
@@ -28,6 +32,7 @@ DEFAULT_EFFORT_SINGLE_TURN: Effort = "medium"
 _NO_ADAPTIVE_THINKING_PATTERNS: tuple[str, ...] = (
     "claude-3-haiku",
     "claude-3-5-haiku",
+    "claude-haiku-4-5",
     "claude-3-sonnet",
     "claude-3-5-sonnet",
     "claude-3-opus",
@@ -100,7 +105,7 @@ def invoke_model(
     Returns the text content of the model's response.
     """
     if model_id is None:
-        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+        model_id = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
     body: dict[str, Any] = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": max_tokens,
@@ -141,8 +146,13 @@ def invoke_with_tools(
     ThrottlingException is retried per _invoke_with_retry on each individual call.
     """
     if model_id is None:
-        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+        model_id = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+
+    logger.info("invoke_with_tools: starting agentic loop", extra={
+        "model_id": model_id, "max_turns": max_turns, "effort": effort,
+        "num_tools": len(tools), "tool_names": [t.get("name", "") for t in tools],
+    })
 
     for turn in range(max_turns):
         body: dict[str, Any] = {
@@ -155,6 +165,7 @@ def invoke_with_tools(
         if _supports_adaptive_thinking(model_id):
             body["thinking"] = {"type": "adaptive"}
             body["output_config"] = {"effort": effort}
+        logger.info("invoke_with_tools: turn %d — invoking model", turn + 1)
         result = _invoke_with_retry(body, model_id)
         stop_reason: str = result["stop_reason"]
         content: list[dict[str, Any]] = result["content"]
@@ -162,7 +173,12 @@ def invoke_with_tools(
         # Append the assistant's response (may include thinking, text, tool_use blocks)
         messages.append({"role": "assistant", "content": content})
 
+        tool_names_used = [b["name"] for b in content if b["type"] == "tool_use"]
+        logger.info("invoke_with_tools: turn %d — stop_reason=%s, tools_used=%s",
+                     turn + 1, stop_reason, tool_names_used)
+
         if stop_reason == "end_turn":
+            logger.info("invoke_with_tools: completed after %d turns", turn + 1)
             return _extract_text(content)
 
         if stop_reason == "tool_use":
@@ -170,6 +186,7 @@ def invoke_with_tools(
             tool_results: list[dict[str, Any]] = []
             for block in content:
                 if block["type"] == "tool_use":
+                    logger.info("invoke_with_tools: executing tool %s", block["name"])
                     tool_result = tool_executor(block["name"], block["input"])
                     tool_results.append(
                         {

@@ -79,7 +79,7 @@ resource "aws_lambda_function" "discovery" {
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
-  timeout          = 300
+  timeout          = 900 # Agentic loop: multiple Bedrock tool-use calls + Exa + GitHub
   layers           = [aws_lambda_layer_version.shared.arn]
 
   environment {
@@ -163,7 +163,7 @@ resource "aws_lambda_function" "research" {
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
-  timeout          = 300
+  timeout          = 900 # Agentic loop: multiple Bedrock tool-use calls + GitHub API
   layers           = [aws_lambda_layer_version.shared.arn]
 
   environment {

@@ -120,13 +120,13 @@ PYTHONPATH=lambdas/shared/python pytest tests/e2e/test_site.py -m e2e -v
 | `test_mcp_tools.py` | pending | | | | |
 | `test_site.py` | pending | | | | |
 
-**Blocker:** Bedrock model access not enabled in account `407645373626`. The Discovery Lambda calls `us.anthropic.claude-sonnet-4-6` via Bedrock `InvokeModel` and gets `ResourceNotFoundException`. Action required:
-1. AWS Console → Bedrock → Model access → Request access to Claude Sonnet 4.6 and Nova Canvas
-2. Re-run tests after approval
+**Current blocker:** Discovery handler's `_parse_discovery_output` gets empty/non-JSON from Haiku 4.5. The agentic loop completes (4 turns, ~10s) but final text is not valid JSON. Needs handler-level fix (output parsing robustness or model quality tuning).
 
-**Infrastructure fixes discovered during deployment:**
-1. `observability.tf`: `extended_statistics` → `extended_statistic` (terraform plan error)
+**Infrastructure fixes discovered during deployment (7 total):**
+1. `observability.tf`: `extended_statistics` → `extended_statistic` (terraform plan error, 9 alarms)
 2. `step-functions.tf`: added `resume_from = ""` to InitializeMetadata (SFN Choice state runtime error)
-3. `step-functions.tf`: added CloudWatch Logs IAM permissions for SFN (AccessDeniedException on state machine creation)
-4. `lambdas/shared/build.sh`: added `aws-xray-sdk==2.14.0` (missing Powertools Tracer dependency)
-5. `terraform/lambdas.tf`: `handler.handler` → `handler.lambda_handler` (HandlerNotFound error)
+3. `step-functions.tf`: added CloudWatch Logs IAM permissions for SFN role (AccessDeniedException)
+4. `lambdas/shared/build.sh`: added `aws-xray-sdk==2.14.0` (Powertools Tracer dependency)
+5. `terraform/lambdas.tf`: `handler.handler` → `handler.lambda_handler` (HandlerNotFound)
+6. `terraform/lambdas.tf`: Discovery/Research timeout 300→900s (agentic loop too slow for Sonnet)
+7. `shared/bedrock.py`: model ID `anthropic.claude-haiku-4-5` → `us.anthropic.claude-haiku-4-5` (inference profile required), added to `_NO_ADAPTIVE_THINKING_PATTERNS` (no output_config.effort support), added turn-level logging
