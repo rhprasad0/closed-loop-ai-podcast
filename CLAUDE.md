@@ -13,13 +13,17 @@ Project context and conventions for AI assistants working on this codebase.
 ```
 terraform/          Terraform IaC — all AWS resources (lambdas.tf, mcp.tf, observability.tf, etc.)
 lambdas/            One directory per agent/function, each with handler.py and prompts/
-lambdas/shared/     Lambda Layer source — Bedrock client, DB helpers, S3 utils
+lambdas/shared/     Lambda Layer source — 7 modules: bedrock, db, s3, logging, tracing, metrics, types
 lambdas/mcp/        MCP control plane Lambda (26 tools, 5 resources) — tools/ subdirectory
 lambdas/site/       Dynamic website Lambda (Function URL + CloudFront)
 layers/ffmpeg/      ffmpeg binary packaged as a Lambda Layer
 sql/                Database schema definitions
 tests/              Unit (tests/unit/), integration (tests/integration/), and e2e (tests/e2e/)
 ```
+
+## Implementation Status
+
+All production Lambda code is implemented. Unit tests: 297 passing across 21 test files. Integration and e2e test directories exist as stubs (`tests/integration/`, `tests/e2e/`) — not yet implemented.
 
 ## Hard Constraints
 

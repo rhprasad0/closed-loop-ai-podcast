@@ -21,7 +21,9 @@ The entire codebase was scaffolded by a single autonomous run of [Ralph Wiggum](
 | Lint | Ruff + mypy — 10 iterations, 19 errors → 1 |
 | Tests | pytest — 6 iterations, 165 pass / 31 fail / 11 error → **201 pass / 0 fail / 0 error** |
 
-The 6 blocked tasks were all MCP tool modules that failed validation because an earlier task committed `__init__.py` with absolute imports (`from tools import agents`) that only resolve inside the Lambda runtime, not from the repo root. Sonnet diagnosed the root cause correctly every attempt but couldn't fix it — the file was out of scope for the task. These were fixed by hand after the run.
+The 6 blocked tasks were all MCP tool modules that failed validation because an earlier task committed `__init__.py` with absolute imports (`from tools import agents`) that only resolve inside the Lambda runtime, not from the repo root. Sonnet diagnosed the root cause correctly every attempt but couldn't fix it — the file was out of scope for the task.
+
+**Post-run fixes** (commit `20dd968`): Fixed the 6 blocked MCP tool tasks, corrected a `STATEMACHINE_ARN` → `STATE_MACHINE_ARN` env var bug in pipeline.py, and added 96 new tests — bringing the total to **297 unit tests passing** across 21 test files. Integration and e2e tests are not yet implemented (stub directories at `tests/integration/` and `tests/e2e/`).
 
 ## Architecture
 
@@ -200,7 +202,7 @@ Everything is Terraform. Everything is serverless.
 │   ├── observability.tf
 │   └── mcp.tf
 ├── lambdas/
-│   ├── shared/                  # Lambda Layer: Bedrock client, DB helpers, S3 utils
+│   ├── shared/                  # Lambda Layer: bedrock, db, s3, logging, tracing, metrics, types
 │   ├── discovery/
 │   │   ├── handler.py
 │   │   └── prompts/discovery.md
@@ -260,6 +262,8 @@ Three tables in the existing RDS Postgres instance:
 | s3_mp4_path | text | |
 | s3_cover_art_path | text | |
 | producer_attempts | int | How many script iterations |
+| execution_id | text | Step Functions execution ID |
+| language | text | Primary repo language |
 | created_at | timestamptz | |
 
 **`episode_metrics`** — LinkedIn performance, updated periodically.
@@ -319,11 +323,20 @@ terraform plan
 terraform apply
 ```
 
-Required variables:
-- `elevenlabs_api_key`
-- `exa_api_key`
-- `rds_connection_string` (existing instance)
-- `domain_name` (for CloudFront + Route53)
+Required variables (no defaults):
+- `elevenlabs_api_key` — ElevenLabs API key for TTS
+- `exa_api_key` — Exa Search API key for Discovery agent
+- `db_connection_string` — Postgres connection string
+- `mcp_allowed_principal` — IAM principal ARN for MCP Function URL auth
+
+Optional variables (have defaults):
+- `domain_name` — default: `podcast.ryans-lab.click`
+- `project_prefix` — default: `zerostars`
+- `alert_email` — default: `""` (disables SNS subscription)
+- `pipeline_failure_threshold` — default: `1`
+- `lambda_error_threshold` — default: `1`
+- `lambda_timeout_threshold_ms` — default: `270000` (90% of 300s timeout)
+- `producer_fail_threshold` — default: `3`
 
 ## Cost
 
