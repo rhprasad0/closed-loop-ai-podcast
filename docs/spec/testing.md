@@ -714,6 +714,25 @@ def test_exa_snake_to_camel_mapping(mock_urlopen, mock_secrets_manager):
     assert "numResults" in sent_body
     assert "startPublishedDate" in sent_body
     assert "include_domains" not in sent_body
+    assert sent_body["contents"] == {"text": True}  # always injected by handler
+
+
+def test_exa_exclude_text_camel_case(mock_urlopen, mock_secrets_manager):
+    from lambdas.discovery.handler import _execute_exa_search
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps({"results": []}).encode()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+    mock_urlopen.return_value = mock_response
+
+    _execute_exa_search({
+        "query": "python cli tool",
+        "exclude_text": "awesome list",
+    })
+    request_obj = mock_urlopen.call_args[0][0]
+    sent_body = json.loads(request_obj.data)
+    assert "excludeText" in sent_body
+    assert "exclude_text" not in sent_body
 
 
 def test_exa_http_error(mock_urlopen, mock_secrets_manager):
@@ -1850,6 +1869,15 @@ def test_parse_coerces_string_score_to_int():
     assert isinstance(result["score"], int)
 
 
+def test_parse_rejects_score_out_of_range():
+    too_low = {**VALID_PASS_OUTPUT, "score": 0}
+    with pytest.raises(ValueError, match="score"):
+        _parse_producer_output(json.dumps(too_low))
+    too_high = {**VALID_PASS_OUTPUT, "score": 11}
+    with pytest.raises(ValueError, match="score"):
+        _parse_producer_output(json.dumps(too_high))
+
+
 def test_parse_rejects_invalid_json():
     with pytest.raises((ValueError, json.JSONDecodeError)):
         _parse_producer_output("this is not json at all")
@@ -2140,6 +2168,28 @@ def test_handler_handles_empty_benchmark_results(
             lambda_context,
         )
     assert result["verdict"] == "PASS"
+
+
+def test_handler_survives_db_exception_in_benchmark_fetch(
+    pipeline_metadata, lambda_context, mock_producer_invoke_model,
+    mock_producer_db_query, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    mock_producer_db_query.side_effect = Exception("connection refused")
+    mock_producer_invoke_model.return_value = VALID_PASS_HANDLER_OUTPUT
+    with patch("lambdas.producer.handler._load_system_prompt", return_value="sp"):
+        from lambdas.producer.handler import lambda_handler
+        result = lambda_handler(
+            {
+                "metadata": pipeline_metadata,
+                "discovery": sample_discovery_output,
+                "research": sample_research_output,
+                "script": sample_script_output,
+            },
+            lambda_context,
+        )
+    # _fetch_benchmark_scripts catches DB exceptions and returns []
+    assert result["verdict"] in ("PASS", "FAIL")
 
 
 def test_handler_propagates_runtime_error_from_invoke_model(

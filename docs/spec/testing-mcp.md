@@ -144,9 +144,11 @@ def mock_site_boto3_clients():
 def mock_mcp_db(mock_db_connection):
     """Patches get_connection at the MCP data module's import path.
 
-    The assets module (assets.py) delegates database queries through the data
-    module's functions, so patching data.get_connection covers both data and
-    asset tool tests that need DB access.
+    All MCP modules that need DB access delegate through the data module's
+    functions rather than importing get_connection from shared.db directly.
+    This applies to: data tools, asset tools (get_episode_assets), observation
+    tools (get_pipeline_health), site tools (get_site_status), and all resource
+    handlers. Patching data.get_connection covers all of them.
     """
     with patch("lambdas.mcp.tools.data.get_connection") as mock:
         conn = MagicMock()

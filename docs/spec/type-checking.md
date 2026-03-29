@@ -234,12 +234,16 @@ TOOL_DEFINITIONS: list[ToolDefinition] = [...]  # populated per [External API Co
 
 
 def _get_exa_api_key() -> str:
-    """Fetch Exa API key from Secrets Manager, cached across warm starts."""
+    """Fetch Exa API key from Secrets Manager (zerostars/exa-api-key), cached across warm starts."""
     ...
 
 
 def _load_system_prompt() -> str:
-    """Read prompts/discovery.md from disk. Uses LAMBDA_TASK_ROOT."""
+    """Read prompts/discovery.md from disk.
+
+    Uses LAMBDA_TASK_ROOT (set by AWS Lambda runtime) to locate the prompt file,
+    falling back to the handler's directory for local testing.
+    """
     ...
 
 
@@ -902,7 +906,7 @@ def _get_episodes() -> list[dict[str, Any]]:
 
     Returns list of dicts with episode metadata for the listing page.
     Excludes large fields (script_text, research_json, cover_art_prompt).
-    Returns empty list on DB error (the site should not crash on DB failure).
+    On DB error, the handler returns a 500 response (not an unhandled exception).
     """
     ...
 
@@ -944,7 +948,7 @@ def lambda_handler(event: dict[str, object], context: LambdaContext) -> dict[str
 **Key typing notes:**
 
 - **Different type signature than pipeline handlers:** The handler receives `dict[str, object]` (Lambda Function URL event), not `PipelineState`. It returns `dict[str, object]` (Function URL response), not a TypedDict.
-- `_get_episodes` uses `shared.db.get_connection()` directly because it needs to build dicts from `cursor.description` column names. It catches exceptions and returns an empty list — the site should degrade gracefully, not crash.
+- `_get_episodes` uses `shared.db.get_connection()` directly because it needs to build dicts from `cursor.description` column names. On DB error, the exception propagates to the handler's top-level try/except, which returns a 500 response.
 - `_render_template` uses Jinja2's `FileSystemLoader`. The `jinja2` package is pip-installed into the Lambda deployment package by `lambdas/site/build.sh`.
 - `_build_response` builds the Function URL response format: `{"statusCode": 200, "headers": {...}, "body": "<html>..."}`.
 - `generate_presigned_url` from `shared.s3` creates time-limited URLs for the HTML5 audio player. The 1-hour expiry (`PRESIGNED_URL_EXPIRY`) is long enough for a listening session.

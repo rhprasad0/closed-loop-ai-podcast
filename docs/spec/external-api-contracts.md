@@ -247,7 +247,7 @@ The Discovery agent uses Bedrock's tool-use capability to call Exa. Define Exa s
 }
 ```
 
-When Bedrock returns a `tool_use` block for `exa_search`, the Lambda translates snake_case tool inputs to camelCase and executes the actual Exa API call via `urllib.request` with a **30-second timeout**:
+When Bedrock returns a `tool_use` block for `exa_search`, the Lambda translates snake_case tool inputs to camelCase (generic algorithm: split on `_`, capitalize each segment after the first, rejoin — e.g., `include_domains` → `includeDomains`, `exclude_text` → `excludeText`) and executes the actual Exa API call via `urllib.request` with a **30-second timeout**:
 
 ```
 POST https://api.exa.ai/search
@@ -360,6 +360,8 @@ Headers:
 ```
 
 The `User-Agent` header is required — GitHub returns 403 without it. No auth key needed (public API, rate limited to 60 req/hour unauthenticated).
+
+On `urllib.error.HTTPError` or `socket.timeout`, the function returns `{"error": "<description>"}` instead of raising — consistent with all other Discovery tool functions and the Research GitHub tools.
 
 The handler returns a curated subset of the response (the full GitHub response is ~3KB and would inflate the Bedrock conversation):
 

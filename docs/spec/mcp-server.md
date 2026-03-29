@@ -786,6 +786,8 @@ Health check for the podcast website.
 
 Read-only data that Claude can browse without invoking a tool.
 
+**Implementation pattern:** Each resource handler in `resources.py` delegates to the corresponding tool module for its implementation. For example, `read_pipeline_status_resource()` calls `pipeline.list_executions()`, and DB-backed resources call through `data` module functions (not `shared.db` directly). This keeps resource handlers thin and ensures mock fixtures only need to patch tool module paths.
+
 | URI | Description | Data Source |
 |-----|-------------|-------------|
 | `zerostars://episodes` | All episodes (id, air_date, repo_name, developer_github, star_count, producer_attempts) | Postgres `episodes` table |
