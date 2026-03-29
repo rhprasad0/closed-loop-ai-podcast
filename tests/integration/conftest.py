@@ -94,9 +94,9 @@ def redirect_urls(
     and rewrites the host:port to point at the corresponding local twin server.
     Handler code runs completely unmodified.
     """
-    github_host, github_port = github_twin.server_address
-    exa_host, exa_port = exa_twin.server_address
-    elevenlabs_host, elevenlabs_port = elevenlabs_twin.server_address
+    github_host, github_port = github_twin.host, github_twin.port
+    exa_host, exa_port = exa_twin.host, exa_twin.port
+    elevenlabs_host, elevenlabs_port = elevenlabs_twin.host, elevenlabs_twin.port
 
     _host_map: dict[str, tuple[str, int]] = {
         "api.github.com": (str(github_host), int(github_port)),
