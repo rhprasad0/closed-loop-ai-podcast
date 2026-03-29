@@ -191,7 +191,8 @@ Lambda Resource ARNs are shown as `<discovery_lambda_arn>` etc. In Terraform's `
       "Type": "Pass",
       "Parameters": {
         "execution_id.$": "$.metadata.execution_id",
-        "script_attempt.$": "States.MathAdd($.metadata.script_attempt, 1)"
+        "script_attempt.$": "States.MathAdd($.metadata.script_attempt, 1)",
+        "resume_from": null
       },
       "ResultPath": "$.metadata",
       "Next": "Script"

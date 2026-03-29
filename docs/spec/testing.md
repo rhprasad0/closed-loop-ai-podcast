@@ -41,6 +41,7 @@ tests/
 │   ├── test_bedrock_live.py
 │   ├── test_s3_live.py
 │   ├── test_db_live.py
+│   ├── test_discovery_live.py
 │   ├── test_packaging.py
 │   ├── test_mcp_pipeline_live.py
 │   ├── test_mcp_data_live.py
@@ -52,6 +53,7 @@ tests/
     ├── test_research_e2e.py
     ├── test_script_e2e.py
     ├── test_producer_e2e.py
+    ├── test_cover_art_e2e.py
     └── test_mcp_e2e.py
 ```
 
@@ -150,7 +152,7 @@ def mock_db_connection():
     """Patches psycopg2.connect in shared/db.py.
 
     Used by handlers that access Postgres via the shared db module
-    (Discovery, Producer, Post-Production, Site).
+    (Discovery, Post-Production, Site).
     """
     with patch("shared.db.psycopg2.connect") as mock:
         conn = MagicMock()
@@ -557,7 +559,7 @@ def test_parse_rejects_invalid_json():
 ```python
 from unittest.mock import patch
 
-def test_psql_select_allowed(mock_db_connection):
+def test_execute_query_select_allowed(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
     mock_db_connection.cursor.return_value.fetchall.return_value = [("user1",), ("user2",)]
     result = _execute_query_postgres({"sql": "SELECT developer_github FROM featured_developers;"})
@@ -565,38 +567,38 @@ def test_psql_select_allowed(mock_db_connection):
     assert "user1" in result["rows"][0]
 
 
-def test_psql_rejects_insert():
+def test_execute_query_rejects_insert():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "INSERT INTO episodes VALUES (1, 'x');"})
     assert "error" in result
 
 
-def test_psql_rejects_delete():
+def test_execute_query_rejects_delete():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "DELETE FROM episodes;"})
     assert "error" in result
 
 
-def test_psql_rejects_drop():
+def test_execute_query_rejects_drop():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "DROP TABLE episodes;"})
     assert "error" in result
 
 
-def test_psql_rejects_update():
+def test_execute_query_rejects_update():
     from lambdas.discovery.handler import _execute_query_postgres
     result = _execute_query_postgres({"sql": "UPDATE episodes SET repo_name = 'x';"})
     assert "error" in result
 
 
-def test_psql_leading_whitespace_select(mock_db_connection):
+def test_execute_query_leading_whitespace_select(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
     mock_db_connection.cursor.return_value.fetchall.return_value = [("ok",)]
     result = _execute_query_postgres({"sql": "   SELECT 1;"})
     assert "rows" in result
 
 
-def test_psql_error_returns_stderr(mock_db_connection):
+def test_execute_query_error_returns_error(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
     from psycopg2 import OperationalError
     mock_db_connection.cursor.return_value.execute.side_effect = OperationalError("relation does not exist")
@@ -605,7 +607,7 @@ def test_psql_error_returns_stderr(mock_db_connection):
     assert "relation" in result["error"]
 
 
-def test_psql_timeout_returns_error(mock_db_connection):
+def test_execute_query_timeout_returns_error(mock_db_connection):
     from lambdas.discovery.handler import _execute_query_postgres
     from psycopg2 import OperationalError
     mock_db_connection.cursor.return_value.execute.side_effect = OperationalError("query timeout")

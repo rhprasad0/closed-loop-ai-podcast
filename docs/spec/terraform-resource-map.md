@@ -46,11 +46,12 @@ No modules. Every resource defined inline. This section maps each Terraform reso
 | Shared Lambda Layer | `aws_lambda_layer_version` | Source: `build/shared-layer.zip` (built by `lambdas/shared/build.sh`). `compatible_architectures = ["x86_64"]`. |
 | ffmpeg Lambda Layer | `aws_lambda_layer_version` | Source: `layers/ffmpeg/ffmpeg-layer.zip` (built by `build.sh`). `compatible_architectures = ["x86_64"]`. |
 | Per-Lambda (×8): | | |
-| — Deployment package | `data "archive_file"` | Zips `handler.py` + `prompts/` dir |
+| — Deployment package | `data "archive_file"` | Zips `handler.py` (+ `prompts/` dir where present) |
 | — Function | `aws_lambda_function` | Python 3.12, layers attached, env vars set, `logging_config` block, `depends_on` log group |
 | — IAM role | `aws_iam_role` | Lambda assume-role trust policy |
 | — IAM policy | `aws_iam_role_policy` | Least-privilege: CloudWatch Logs + function-specific permissions |
 | — Log group | `aws_cloudwatch_log_group` | 14-day retention |
+| — X-Ray policy attachment | `aws_iam_role_policy_attachment` | `AWSXrayWriteOnlyAccess` managed policy |
 
 **Per-Lambda `tracing_config` block** (X-Ray active tracing — applies to all 8 functions in `lambdas.tf`; MCP in `mcp.tf` uses the same pattern):
 
@@ -80,8 +81,8 @@ logging_config {
 | `POWERTOOLS_LOG_LEVEL` | `INFO` |
 | `POWERTOOLS_METRICS_NAMESPACE` | `ZeroStars` |
 | `POWERTOOLS_TRACER_CAPTURE_RESPONSE` | `false` |
-| `DB_CONNECTION_STRING` | Discovery, Producer, Post-Production, Site: `var.db_connection_string` |
-| `S3_BUCKET` | Cover Art, TTS, Post-Production, Site: `aws_s3_bucket.episodes.id` (the episodes bucket name) |
+| `DB_CONNECTION_STRING` | Discovery, Producer, Post-Production, Site, MCP: `var.db_connection_string` |
+| `S3_BUCKET` | Cover Art, TTS, Post-Production, Site, MCP: `aws_s3_bucket.episodes.id` (the episodes bucket name) |
 
 **Per-Lambda IAM permissions:**
 

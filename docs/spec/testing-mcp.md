@@ -526,6 +526,83 @@ def test_invoke_cover_art_uses_provided_execution_id(mock_lambda_client):
     assert payload["metadata"]["execution_id"] == "custom-id"
 
 
+def test_invoke_tts_passes_script_text(mock_lambda_client):
+    from lambdas.mcp.tools.agents import invoke_tts
+    mock_lambda_client.invoke.return_value = {
+        "StatusCode": 200,
+        "Payload": MagicMock(read=lambda: json.dumps({
+            "s3_key": "episodes/test/episode.mp3",
+            "duration_seconds": 180,
+            "character_count": 4200,
+        }).encode()),
+    }
+
+    invoke_tts(script_text="**Hype:** Welcome back!")
+
+    payload = json.loads(mock_lambda_client.invoke.call_args.kwargs["Payload"])
+    assert payload["script"]["text"] == "**Hype:** Welcome back!"
+
+
+def test_invoke_tts_auto_generates_execution_id(mock_lambda_client):
+    from lambdas.mcp.tools.agents import invoke_tts
+    mock_lambda_client.invoke.return_value = {
+        "StatusCode": 200,
+        "Payload": MagicMock(read=lambda: json.dumps({
+            "s3_key": "episodes/test/episode.mp3",
+            "duration_seconds": 180,
+            "character_count": 4200,
+        }).encode()),
+    }
+
+    invoke_tts(script_text="**Hype:** Hello!")
+
+    payload = json.loads(mock_lambda_client.invoke.call_args.kwargs["Payload"])
+    assert payload["metadata"]["execution_id"].startswith("mcp-standalone-")
+
+
+def test_invoke_post_production_passes_all_agent_outputs(
+    mock_lambda_client, sample_discovery_output, sample_research_output,
+):
+    from lambdas.mcp.tools.agents import invoke_post_production
+    sample_script = {
+        "text": "**Hype:** Hello!", "character_count": 15,
+        "segments": ["intro"], "featured_repo": "repo",
+        "featured_developer": "user", "cover_art_suggestion": "art",
+    }
+    sample_cover_art = {"s3_key": "episodes/test/cover.png", "prompt_used": "prompt"}
+    sample_tts = {
+        "s3_key": "episodes/test/episode.mp3",
+        "duration_seconds": 180, "character_count": 4200,
+    }
+
+    mock_lambda_client.invoke.return_value = {
+        "StatusCode": 200,
+        "Payload": MagicMock(read=lambda: json.dumps({
+            "s3_mp4_key": "episodes/test/episode.mp4",
+            "episode_id": 1,
+            "air_date": "2025-07-13",
+        }).encode()),
+    }
+
+    invoke_post_production(
+        discovery=sample_discovery_output,
+        research=sample_research_output,
+        script=sample_script,
+        cover_art=sample_cover_art,
+        tts=sample_tts,
+    )
+
+    payload = json.loads(mock_lambda_client.invoke.call_args.kwargs["Payload"])
+    assert "discovery" in payload
+    assert "research" in payload
+    assert "script" in payload
+    assert "cover_art" in payload
+    assert "tts" in payload
+    assert payload["script"]["text"] == "**Hype:** Hello!"
+    assert payload["cover_art"]["s3_key"] == "episodes/test/cover.png"
+    assert payload["tts"]["s3_key"] == "episodes/test/episode.mp3"
+
+
 def test_invoke_agent_lambda_error_raises(mock_lambda_client):
     from lambdas.mcp.tools.agents import invoke_discovery
     mock_lambda_client.invoke.return_value = {
@@ -800,6 +877,26 @@ def test_query_featured_developers_joins_episodes(mock_mcp_db):
     sql = cursor.execute.call_args[0][0]
     assert "JOIN" in sql or "join" in sql.lower()
     assert result["developers"][0]["repo_name"] == "repo"
+
+
+def test_query_metrics_joins_episodes(mock_mcp_db):
+    from lambdas.mcp.tools.data import query_metrics
+    conn, cursor = mock_mcp_db
+    cursor.description = [
+        ("episode_id",), ("repo_name",), ("developer_github",),
+        ("linkedin_post_url",), ("views",), ("likes",),
+        ("comments",), ("shares",), ("snapshot_date",),
+    ]
+    cursor.fetchall.return_value = [
+        (1, "repo", "user", "https://linkedin.com/post/1", 1200, 45, 12, 8, "2025-07-10")
+    ]
+
+    result = query_metrics()
+
+    sql = cursor.execute.call_args[0][0]
+    assert "JOIN" in sql or "join" in sql.lower()
+    assert result["metrics"][0]["repo_name"] == "repo"
+    assert result["metrics"][0]["views"] == 1200
 ```
 
 ### Unit Tests: Assets (`test_assets.py`)

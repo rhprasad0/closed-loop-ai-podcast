@@ -639,11 +639,6 @@ Insert or update engagement metrics for an episode.
 
 **SQL:** `INSERT INTO episode_metrics (...) VALUES (...) ON CONFLICT (episode_id, snapshot_date) DO UPDATE SET ...`. Snapshot date is set to current date.
 
-> **Note:** The `episode_metrics` table does not currently have a unique constraint on `(episode_id, snapshot_date)`. This constraint should be added when implementing the MCP server:
-> ```sql
-> CREATE UNIQUE INDEX idx_episode_metrics_unique ON episode_metrics(episode_id, snapshot_date);
-> ```
-
 ---
 
 ### Assets
@@ -875,7 +870,11 @@ resource "aws_lambda_function" "mcp" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.mcp]
+  depends_on = [
+    aws_iam_role_policy.mcp,
+    aws_iam_role_policy_attachment.mcp_xray,
+    aws_cloudwatch_log_group.mcp
+  ]
 }
 
 resource "aws_lambda_function_url" "mcp" {

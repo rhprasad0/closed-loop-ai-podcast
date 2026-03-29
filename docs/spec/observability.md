@@ -118,7 +118,7 @@ These use the `ZeroStars` namespace defined by Powertools Metrics (see [Instrume
 | Alarm | Metric | Condition | Default Threshold | Rationale |
 |-------|--------|-----------|-------------------|-----------|
 | High Producer Fail Rate | `ProducerVerdict` (dimension `verdict=FAIL`) | Sum >= threshold in 24 hours | 3 | Consecutive FAIL verdicts suggest prompt regression or Bedrock model quality shift |
-| Script Too Long | `ScriptCharacterCount` | Maximum >= threshold in 1 eval period | 4,900 | Early warning before the 5,000-character ElevenLabs hard limit (see below) |
+| Script Too Long | `ScriptCharacterCount` | Maximum >= threshold in 1 eval period | `var.script_character_count_threshold` (default 4,900) | Early warning before the 5,000-character ElevenLabs hard limit (see below) |
 
 > **Why 4,900?** The Producer agent enforces a hard 5,000-character limit at evaluation time (scripts at or over 5,000 characters are an automatic FAIL). The 4,900-character alarm threshold is intentional as an early warning — it fires when scripts are approaching the hard limit, giving operators visibility into prompt regression or model drift before scripts start failing evaluation.
 
@@ -126,6 +126,11 @@ These use the `ZeroStars` namespace defined by Powertools Metrics (see [Instrume
 variable "producer_fail_threshold" {
   type    = number
   default = 3
+}
+
+variable "script_character_count_threshold" {
+  type    = number
+  default = 4900
 }
 
 resource "aws_cloudwatch_metric_alarm" "producer_high_fail_rate" {
@@ -143,6 +148,23 @@ resource "aws_cloudwatch_metric_alarm" "producer_high_fail_rate" {
   dimensions = {
     service = "producer"
     verdict = "FAIL"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "script_too_long" {
+  alarm_name          = "${var.project_prefix}-script-too-long"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ScriptCharacterCount"
+  namespace           = "ZeroStars"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.script_character_count_threshold
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    service = "script"
   }
 }
 ```

@@ -21,6 +21,10 @@ client = boto3.client("bedrock-runtime")
 # Script and Producer are single-turn calls where "medium" effort is
 # sufficient and faster. Set max_tokens high enough to leave room for
 # the model's internal thinking at medium/high effort.
+#
+# Note: The effort-2025-11-24 beta header is NOT needed here. That header
+# is only for the separate Opus 4.5 effort mechanism. With adaptive thinking
+# on Sonnet 4.6, output_config.effort is natively supported on Bedrock.
 response = client.invoke_model(
     modelId="us.anthropic.claude-sonnet-4-6",
     contentType="application/json",
@@ -93,6 +97,7 @@ result_text = invoke_with_tools(
 # Messages API body format — tools array in the body, stop_reason in response.
 # Discovery and Research are multi-turn agentic loops where "high" effort
 # improves tool-use decisions and reasoning quality.
+# (No beta header needed — see note above.)
 response = client.invoke_model(
     modelId="us.anthropic.claude-sonnet-4-6",
     contentType="application/json",
@@ -335,7 +340,7 @@ The Discovery agent uses this tool to verify star counts and repo metadata befor
 ```
 GET https://api.github.com/repos/{owner}/{repo}
 Headers:
-  Accept: application/vnd.github.v3+json
+  Accept: application/vnd.github+json
   User-Agent: zerostars-discovery-agent
 ```
 

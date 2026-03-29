@@ -40,6 +40,7 @@ from typing import NotRequired, TypedDict
 class PipelineMetadata(TypedDict):
     execution_id: str
     script_attempt: int
+    resume_from: NotRequired[str]
 
 
 class DiscoveryOutput(TypedDict):
