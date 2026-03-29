@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}0 Stars, 10/10 — Episodes{% endblock %}
+
+{% block head %}
+<style>
+    /* ── Episode list ── */
+    .page-heading {
+        font-size: 1.4rem;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 8px;
+    }
+
+    .page-desc {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        margin-bottom: 32px;
+    }
+
+    .episode-list {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+    }
+
+    .episode-card {
+        background-color: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: 160px 1fr;
+    }
+
+    @media (max-width: 600px) {
+        .episode-card {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .episode-cover {
+        width: 160px;
+        height: 160px;
+        object-fit: cover;
+        display: block;
+        background-color: var(--bg);
+        flex-shrink: 0;
+    }
+
+    .episode-cover-placeholder {
+        width: 160px;
+        height: 160px;
+        background-color: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        flex-shrink: 0;
+    }
+
+    @media (max-width: 600px) {
+        .episode-cover,
+        .episode-cover-placeholder {
+            width: 100%;
+            height: 200px;
+        }
+    }
+
+    .episode-body {
+        padding: 20px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .episode-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: var(--text);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .episode-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        align-items: center;
+    }
+
+    .episode-developer {
+        color: var(--accent);
+    }
+
+    .episode-stars {
+        color: var(--star);
+    }
+
+    .episode-audio {
+        margin-top: 8px;
+    }
+
+    .episode-audio audio {
+        width: 100%;
+        height: 36px;
+        accent-color: var(--accent);
+    }
+
+    /* Minimal audio styling — browsers vary; keep it simple */
+    audio::-webkit-media-controls-panel {
+        background-color: var(--bg);
+    }
+
+    .no-episodes {
+        text-align: center;
+        padding: 64px 0;
+        color: var(--text-muted);
+    }
+
+    .no-episodes p {
+        margin-bottom: 8px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="page-heading">Episodes</h1>
+<p class="page-desc">
+    Every episode features a GitHub project with under 10 stars — discovered, researched, scripted,
+    and produced by an autonomous multi-agent workflow.
+</p>
+
+{% if episodes %}
+<div class="episode-list">
+    {% for ep in episodes %}
+    <article class="episode-card">
+        {% if ep.cover_art_url %}
+        <img
+            class="episode-cover"
+            src="{{ ep.cover_art_url }}"
+            alt="Cover art for {{ ep.repo_name }}"
+            loading="lazy"
+        >
+        {% else %}
+        <div class="episode-cover-placeholder">No cover</div>
+        {% endif %}
+
+        <div class="episode-body">
+            <div class="episode-title">{{ ep.repo_name }}</div>
+
+            <div class="episode-meta">
+                <span class="episode-developer">{{ ep.developer_name }}</span>
+                <span>&#64;{{ ep.developer_github }}</span>
+                <span class="episode-stars">&#9733; {{ ep.star_count }} stars</span>
+                {% if ep.language %}
+                <span>{{ ep.language }}</span>
+                {% endif %}
+                <span>{{ ep.air_date }}</span>
+            </div>
+
+            {% if ep.audio_url %}
+            <div class="episode-audio">
+                <audio controls preload="none">
+                    <source src="{{ ep.audio_url }}" type="audio/mpeg">
+                    Your browser does not support the audio element.
+                </audio>
+            </div>
+            {% endif %}
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<div class="no-episodes">
+    <p>No episodes yet.</p>
+    <p>The pipeline runs weekly — check back soon.</p>
+</div>
+{% endif %}
+{% endblock %}
