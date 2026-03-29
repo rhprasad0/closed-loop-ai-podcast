@@ -62,20 +62,14 @@ def setup_elevenlabs_twin(server: HTTPServer) -> ElevenLabsTwinState:
         for i, entry in enumerate(inputs):
             if not isinstance(entry, dict):
                 return Response(
-                    json.dumps(
-                        {"detail": f"validation error: inputs[{i}] must be a dict"}
-                    ),
+                    json.dumps({"detail": f"validation error: inputs[{i}] must be a dict"}),
                     status=400,
                     content_type="application/json",
                 )
             if "text" not in entry or "voice_id" not in entry:
                 return Response(
                     json.dumps(
-                        {
-                            "detail": (
-                                f"validation error: inputs[{i}] missing 'text' or 'voice_id'"
-                            )
-                        }
+                        {"detail": (f"validation error: inputs[{i}] missing 'text' or 'voice_id'")}
                     ),
                     status=400,
                     content_type="application/json",
@@ -83,9 +77,7 @@ def setup_elevenlabs_twin(server: HTTPServer) -> ElevenLabsTwinState:
             voice_id = entry["voice_id"]
             if voice_id not in _KNOWN_VOICE_IDS:
                 return Response(
-                    json.dumps(
-                        {"detail": f"validation error: unknown voice_id '{voice_id}'"}
-                    ),
+                    json.dumps({"detail": f"validation error: unknown voice_id '{voice_id}'"}),
                     status=400,
                     content_type="application/json",
                 )

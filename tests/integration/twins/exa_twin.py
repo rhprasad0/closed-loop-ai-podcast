@@ -61,7 +61,9 @@ def setup_exa_twin(server: HTTPServer) -> ExaTwinState:
         # Fallback: if substring filter yielded nothing, return all domain-filtered results
         if not results:
             results = [
-                r for r in EXA_SEARCH_RESULTS if not github_only or "github.com" in str(r.get("url", ""))
+                r
+                for r in EXA_SEARCH_RESULTS
+                if not github_only or "github.com" in str(r.get("url", ""))
             ]
 
         num_results = body.get("numResults")

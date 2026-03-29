@@ -58,11 +58,7 @@ def test_tts_produces_valid_output(
     """TTS handler parses the script, calls ElevenLabs, and uploads audio to S3."""
     from lambdas.tts.handler import lambda_handler
 
-    script_text = (
-        "**Hype:** Hello!\n"
-        "**Roast:** Ugh.\n"
-        "**Phil:** But what is hello?"
-    )
+    script_text = "**Hype:** Hello!\n**Roast:** Ugh.\n**Phil:** But what is hello?"
 
     event: dict[str, Any] = {
         "metadata": pipeline_metadata,

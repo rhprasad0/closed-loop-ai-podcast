@@ -266,9 +266,7 @@ def cleanup_test_data() -> Generator[None, None, None]:
         from shared.db import execute
 
         execute("DELETE FROM episodes WHERE execution_id LIKE 'integration-test-%'")
-        execute(
-            "DELETE FROM featured_developers WHERE developer_github LIKE 'integration-test-%'"
-        )
+        execute("DELETE FROM featured_developers WHERE developer_github LIKE 'integration-test-%'")
     except Exception:
         pass  # DB may be unavailable; don't fail the test on teardown
 
