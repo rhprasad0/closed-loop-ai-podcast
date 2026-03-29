@@ -84,7 +84,9 @@ def test_execute_query_postgres_returns_rows() -> None:
 
     with patch("lambdas.discovery.handler.db_query") as mock_query:
         mock_query.return_value = [("user1",), ("user2",)]
-        result = _execute_query_postgres({"sql": "SELECT developer_github FROM featured_developers"})
+        result = _execute_query_postgres(
+            {"sql": "SELECT developer_github FROM featured_developers"}
+        )
 
     assert "rows" in result
     assert len(result["rows"]) == 2
@@ -244,7 +246,9 @@ def test_github_http_error(mock_urlopen: MagicMock) -> None:
     assert "error" in result
 
 
-def test_exa_snake_to_camel_mapping(mock_urlopen: MagicMock, mock_secrets_manager: MagicMock) -> None:
+def test_exa_snake_to_camel_mapping(
+    mock_urlopen: MagicMock, mock_secrets_manager: MagicMock
+) -> None:
     from lambdas.discovery.handler import _execute_exa_search
 
     mock_response = MagicMock()
@@ -253,12 +257,14 @@ def test_exa_snake_to_camel_mapping(mock_urlopen: MagicMock, mock_secrets_manage
     mock_response.__exit__ = MagicMock(return_value=False)
     mock_urlopen.return_value = mock_response
 
-    _execute_exa_search({
-        "query": "python cli tool",
-        "include_domains": ["github.com"],
-        "num_results": 5,
-        "start_published_date": "2024-01-01",
-    })
+    _execute_exa_search(
+        {
+            "query": "python cli tool",
+            "include_domains": ["github.com"],
+            "num_results": 5,
+            "start_published_date": "2024-01-01",
+        }
+    )
     request_obj = mock_urlopen.call_args[0][0]
     sent_body = json.loads(request_obj.data)
     assert "includeDomains" in sent_body
@@ -268,7 +274,9 @@ def test_exa_snake_to_camel_mapping(mock_urlopen: MagicMock, mock_secrets_manage
     assert sent_body["contents"] == {"text": True}  # always injected by handler
 
 
-def test_exa_exclude_text_camel_case(mock_urlopen: MagicMock, mock_secrets_manager: MagicMock) -> None:
+def test_exa_exclude_text_camel_case(
+    mock_urlopen: MagicMock, mock_secrets_manager: MagicMock
+) -> None:
     from lambdas.discovery.handler import _execute_exa_search
 
     mock_response = MagicMock()
@@ -277,10 +285,12 @@ def test_exa_exclude_text_camel_case(mock_urlopen: MagicMock, mock_secrets_manag
     mock_response.__exit__ = MagicMock(return_value=False)
     mock_urlopen.return_value = mock_response
 
-    _execute_exa_search({
-        "query": "python cli tool",
-        "exclude_text": "awesome list",
-    })
+    _execute_exa_search(
+        {
+            "query": "python cli tool",
+            "exclude_text": "awesome list",
+        }
+    )
     request_obj = mock_urlopen.call_args[0][0]
     sent_body = json.loads(request_obj.data)
     assert "excludeText" in sent_body
@@ -351,17 +361,19 @@ def test_tool_dispatcher_unknown_tool() -> None:
 # ---------------------------------------------------------------------------
 
 
-VALID_HANDLER_OUTPUT = json.dumps({
-    "repo_url": "https://github.com/someone/something",
-    "repo_name": "something",
-    "repo_description": "A cool project",
-    "developer_github": "someone",
-    "star_count": 3,
-    "language": "Go",
-    "discovery_rationale": "Interesting CLI tool.",
-    "key_files": ["main.go"],
-    "technical_highlights": ["Single-binary design"],
-})
+VALID_HANDLER_OUTPUT = json.dumps(
+    {
+        "repo_url": "https://github.com/someone/something",
+        "repo_name": "something",
+        "repo_description": "A cool project",
+        "developer_github": "someone",
+        "star_count": 3,
+        "language": "Go",
+        "discovery_rationale": "Interesting CLI tool.",
+        "key_files": ["main.go"],
+        "technical_highlights": ["Single-binary design"],
+    }
+)
 
 
 def test_handler_returns_valid_output(

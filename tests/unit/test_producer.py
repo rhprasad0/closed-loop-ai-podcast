@@ -35,21 +35,25 @@ VALID_FAIL_OUTPUT = {
 # the query text is an implementation detail. Integration tests (test_db_live.py)
 # verify the JOIN works against real Postgres with actual episode_metrics data.
 
-VALID_PASS_HANDLER_OUTPUT = json.dumps({
-    "verdict": "PASS",
-    "score": 8,
-    "notes": "Strong character voices, specific jokes about testrepo.",
-})
+VALID_PASS_HANDLER_OUTPUT = json.dumps(
+    {
+        "verdict": "PASS",
+        "score": 8,
+        "notes": "Strong character voices, specific jokes about testrepo.",
+    }
+)
 
-VALID_FAIL_HANDLER_OUTPUT = json.dumps({
-    "verdict": "FAIL",
-    "score": 4,
-    "feedback": "The hiring segment uses generic praise. Reference specific repos.",
-    "issues": [
-        "Hiring segment uses generic praise",
-        "Roast's compliment is too vague",
-    ],
-})
+VALID_FAIL_HANDLER_OUTPUT = json.dumps(
+    {
+        "verdict": "FAIL",
+        "score": 4,
+        "feedback": "The hiring segment uses generic praise. Reference specific repos.",
+        "issues": [
+            "Hiring segment uses generic praise",
+            "Roast's compliment is too vague",
+        ],
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +386,8 @@ def test_handler_reads_script_discovery_research_from_event(
             lambda_context,
         )
     user_message = mock_producer_invoke_model.call_args[1].get(  # type: ignore[union-attr]
-        "user_message", mock_producer_invoke_model.call_args[0][0]  # type: ignore[union-attr]
+        "user_message",
+        mock_producer_invoke_model.call_args[0][0],  # type: ignore[union-attr]
     )
     # Script text
     assert "Welcome to 0 Stars" in user_message

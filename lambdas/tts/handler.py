@@ -68,7 +68,9 @@ def _parse_dialogue_turns(script_text: str) -> list[dict[str, str]]:
     turns: list[dict[str, str]] = []
     for line in script_text.splitlines():
         if not line:
-            raise ValueError("Blank line found in script — script format does not allow blank lines")
+            raise ValueError(
+                "Blank line found in script — script format does not allow blank lines"
+            )
         match = SPEAKER_PATTERN.match(line)
         if not match:
             raise ValueError(f"Line does not match speaker pattern: {line!r}")
@@ -106,9 +108,7 @@ def _call_elevenlabs(inputs: list[dict[str, str]]) -> bytes:
             mp3_bytes: bytes = response.read()
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode(errors="replace")
-        raise RuntimeError(
-            f"ElevenLabs API error {exc.code}: {error_body[:500]}"
-        ) from exc
+        raise RuntimeError(f"ElevenLabs API error {exc.code}: {error_body[:500]}") from exc
 
     return mp3_bytes
 

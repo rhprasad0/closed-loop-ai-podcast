@@ -5,6 +5,7 @@ Three sections:
   2. Image generation tests
   3. Full handler tests
 """
+
 from __future__ import annotations
 
 import base64

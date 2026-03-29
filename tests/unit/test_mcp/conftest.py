@@ -6,7 +6,9 @@ import pytest
 
 
 STATE_MACHINE_ARN = "arn:aws:states:us-east-1:123456789:stateMachine:zerostars-pipeline"
-EXECUTION_ARN = "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:mcp-20250713T090000Z"
+EXECUTION_ARN = (
+    "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:mcp-20250713T090000Z"
+)
 S3_BUCKET = "zerostars-episodes-123456789"
 CLOUDFRONT_DIST_ID = "E1234567890"
 ACM_CERT_ARN = "arn:aws:acm:us-east-1:123456789:certificate/abc-123"
@@ -109,7 +111,9 @@ def mock_site_boto3_clients() -> Generator[tuple[MagicMock, MagicMock], None, No
 
 
 @pytest.fixture
-def mock_mcp_db(mock_db_connection: MagicMock) -> Generator[tuple[MagicMock, MagicMock], None, None]:
+def mock_mcp_db(
+    mock_db_connection: MagicMock,
+) -> Generator[tuple[MagicMock, MagicMock], None, None]:
     """Patches get_connection at the MCP data module's import path.
 
     All MCP modules that need DB access delegate through the data module's
@@ -139,10 +143,12 @@ def sample_execution_running() -> dict:
         "name": "mcp-20250713T090000Z",
         "status": "RUNNING",
         "startDate": "2025-07-13T09:00:00.000Z",
-        "input": json.dumps({
-            "metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1},
-            "discovery": {"repo_url": "https://github.com/user/repo", "star_count": 7},
-        }),
+        "input": json.dumps(
+            {
+                "metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1},
+                "discovery": {"repo_url": "https://github.com/user/repo", "star_count": 7},
+            }
+        ),
         "inputDetails": {"included": True},
     }
 
@@ -158,16 +164,18 @@ def sample_execution_succeeded() -> dict:
         "startDate": "2025-07-13T09:00:00.000Z",
         "stopDate": "2025-07-13T09:12:34.000Z",
         "input": json.dumps({"metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1}}),
-        "output": json.dumps({
-            "metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1},
-            "discovery": {"repo_url": "https://github.com/user/repo"},
-            "research": {"developer_name": "Test User"},
-            "script": {"text": "**Hype:** Hello!", "character_count": 15},
-            "producer": {"verdict": "PASS", "score": 8},
-            "cover_art": {"s3_key": "episodes/test/cover.png"},
-            "tts": {"s3_key": "episodes/test/episode.mp3", "duration_seconds": 180},
-            "post_production": {"s3_mp4_key": "episodes/test/episode.mp4", "episode_id": 1},
-        }),
+        "output": json.dumps(
+            {
+                "metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1},
+                "discovery": {"repo_url": "https://github.com/user/repo"},
+                "research": {"developer_name": "Test User"},
+                "script": {"text": "**Hype:** Hello!", "character_count": 15},
+                "producer": {"verdict": "PASS", "score": 8},
+                "cover_art": {"s3_key": "episodes/test/cover.png"},
+                "tts": {"s3_key": "episodes/test/episode.mp3", "duration_seconds": 180},
+                "post_production": {"s3_mp4_key": "episodes/test/episode.mp4", "episode_id": 1},
+            }
+        ),
         "outputDetails": {"included": True},
     }
 
@@ -182,11 +190,13 @@ def sample_execution_failed() -> dict:
         "status": "FAILED",
         "startDate": "2025-07-13T09:00:00.000Z",
         "stopDate": "2025-07-13T09:05:00.000Z",
-        "input": json.dumps({
-            "metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1},
-            "discovery": {"repo_url": "https://github.com/user/repo", "star_count": 7},
-            "research": {"developer_name": "Test User"},
-        }),
+        "input": json.dumps(
+            {
+                "metadata": {"execution_id": EXECUTION_ARN, "script_attempt": 1},
+                "discovery": {"repo_url": "https://github.com/user/repo", "star_count": 7},
+                "research": {"developer_name": "Test User"},
+            }
+        ),
         "error": "States.TaskFailed",
         "cause": "TTS Lambda timed out after 300 seconds",
     }

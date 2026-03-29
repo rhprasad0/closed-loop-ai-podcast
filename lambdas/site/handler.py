@@ -116,7 +116,9 @@ def lambda_handler(event: dict[str, object], context: LambdaContext) -> dict[str
         mp3_key = episode.get("s3_mp3_path", "")
         if mp3_key and s3_bucket:
             try:
-                episode["audio_url"] = generate_presigned_url(s3_bucket, str(mp3_key), PRESIGNED_URL_EXPIRY)
+                episode["audio_url"] = generate_presigned_url(
+                    s3_bucket, str(mp3_key), PRESIGNED_URL_EXPIRY
+                )
             except Exception:
                 logger.warning("Failed to generate presigned URL", extra={"key": mp3_key})
                 episode["audio_url"] = ""

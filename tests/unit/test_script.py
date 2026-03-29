@@ -324,7 +324,8 @@ def test_handler_user_message_contains_discovery_data(
             lambda_context,
         )
     user_message = mock_script_invoke_model.call_args[1].get(  # type: ignore[union-attr]
-        "user_message", mock_script_invoke_model.call_args[0][0]  # type: ignore[union-attr]
+        "user_message",
+        mock_script_invoke_model.call_args[0][0],  # type: ignore[union-attr]
     )
     assert "testrepo" in user_message
     assert "Python" in user_message
@@ -350,7 +351,8 @@ def test_handler_user_message_contains_research_data(
             lambda_context,
         )
     user_message = mock_script_invoke_model.call_args[1].get(  # type: ignore[union-attr]
-        "user_message", mock_script_invoke_model.call_args[0][0]  # type: ignore[union-attr]
+        "user_message",
+        mock_script_invoke_model.call_args[0][0],  # type: ignore[union-attr]
     )
     assert "Test User" in user_message
     assert "Built a custom ORM" in user_message
@@ -376,7 +378,8 @@ def test_handler_first_attempt_no_feedback_in_message(
             lambda_context,
         )
     user_message = mock_script_invoke_model.call_args[1].get(  # type: ignore[union-attr]
-        "user_message", mock_script_invoke_model.call_args[0][0]  # type: ignore[union-attr]
+        "user_message",
+        mock_script_invoke_model.call_args[0][0],  # type: ignore[union-attr]
     )
     assert "Producer Feedback" not in user_message
 
@@ -406,7 +409,8 @@ def test_handler_retry_includes_producer_feedback(
             lambda_context,
         )
     user_message = mock_script_invoke_model.call_args[1].get(  # type: ignore[union-attr]
-        "user_message", mock_script_invoke_model.call_args[0][0]  # type: ignore[union-attr]
+        "user_message",
+        mock_script_invoke_model.call_args[0][0],  # type: ignore[union-attr]
     )
     assert "Producer Feedback" in user_message
     assert "hiring manager segment is too generic" in user_message.lower()

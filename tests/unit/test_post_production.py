@@ -135,7 +135,9 @@ def test_insert_featured_developer_executes(
     from lambdas.post_production.handler import _insert_featured_developer
 
     conn, cursor = mock_post_production_db
-    _insert_featured_developer(conn, developer_github="user", episode_id=42, featured_date="2025-07-13")
+    _insert_featured_developer(
+        conn, developer_github="user", episode_id=42, featured_date="2025-07-13"
+    )
     assert cursor.execute.called
 
 

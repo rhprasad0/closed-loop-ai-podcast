@@ -81,7 +81,10 @@ def test_parse_rejects_invalid_json() -> None:
 
 
 def test_parse_rejects_notable_repos_missing_required_field() -> None:
-    bad_repo = {**VALID_OUTPUT, "notable_repos": [{"name": "repo"}]}  # missing description, stars, language
+    bad_repo = {
+        **VALID_OUTPUT,
+        "notable_repos": [{"name": "repo"}],
+    }  # missing description, stars, language
     with pytest.raises(ValueError, match="notable_repos"):
         _parse_research_output(json.dumps(bad_repo))
 
@@ -430,19 +433,21 @@ def test_tool_dispatcher_unknown_tool() -> None:
 # Full Handler Tests
 # ---------------------------------------------------------------------------
 
-VALID_HANDLER_OUTPUT = json.dumps({
-    "developer_name": "Test User",
-    "developer_github": "testuser",
-    "developer_bio": "Builds things.",
-    "public_repos_count": 15,
-    "notable_repos": [
-        {"name": "testrepo", "description": "A test repo", "stars": 7, "language": "Python"},
-    ],
-    "commit_patterns": "Active on weekends",
-    "technical_profile": "Python and Rust developer",
-    "interesting_findings": ["Built a custom ORM from scratch"],
-    "hiring_signals": ["Ships complete projects with documentation"],
-})
+VALID_HANDLER_OUTPUT = json.dumps(
+    {
+        "developer_name": "Test User",
+        "developer_github": "testuser",
+        "developer_bio": "Builds things.",
+        "public_repos_count": 15,
+        "notable_repos": [
+            {"name": "testrepo", "description": "A test repo", "stars": 7, "language": "Python"},
+        ],
+        "commit_patterns": "Active on weekends",
+        "technical_profile": "Python and Rust developer",
+        "interesting_findings": ["Built a custom ORM from scratch"],
+        "hiring_signals": ["Ships complete projects with documentation"],
+    }
+)
 
 
 def test_handler_returns_valid_output(
