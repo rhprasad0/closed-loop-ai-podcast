@@ -28,7 +28,8 @@ def query(sql: str, params: tuple[object, ...] | None = None) -> list[tuple[obje
         with conn.cursor() as cur:
             cur.execute(sql, params)
             rows: list[tuple[object, ...]] = cur.fetchall()
-            return rows
+        conn.commit()
+        return rows
     finally:
         conn.close()
 
