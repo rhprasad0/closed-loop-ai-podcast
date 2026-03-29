@@ -57,6 +57,8 @@ def _build_user_message(event: PipelineState) -> str:
     script_attempt: int = metadata.get("script_attempt", 1)
 
     lines: list[str] = [
+        f"Attempt {script_attempt}",
+        "",
         "## Discovery Data",
         f"Repo URL: {discovery['repo_url']}",
         f"Repo Name: {discovery['repo_name']}",
@@ -147,7 +149,7 @@ def _parse_script_output(text: str) -> ScriptOutput:
     actual_count = len(script_text)
     if actual_count >= MAX_SCRIPT_CHARACTERS:
         raise ValueError(
-            f"Script character count {actual_count} >= hard limit {MAX_SCRIPT_CHARACTERS}"
+            f"character_count {actual_count} >= hard limit {MAX_SCRIPT_CHARACTERS}"
         )
 
     # Validate segments (exact match, order matters)
@@ -187,10 +189,7 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> ScriptOutput
     )
 
     user_message = _build_user_message(event)
-    result_text = invoke_model(
-        user_message=user_message,
-        system_prompt=system_prompt,
-    )
+    result_text = invoke_model(user_message, system_prompt=system_prompt)
 
     output = _parse_script_output(result_text)
     logger.info(
