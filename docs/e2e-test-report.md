@@ -114,11 +114,13 @@ PYTHONPATH=lambdas/shared/python pytest tests/e2e/test_site.py -m e2e -v
 
 | File | Status | Passed | Failed | Skipped | Notes |
 |------|--------|--------|--------|---------|-------|
-| `test_pipeline_execution.py` | blocked | 0 | 1 | 9 | Bedrock model access not enabled |
-| `test_pipeline_artifacts.py` | blocked | 0 | 0 | 6 | Depends on pipeline success |
-| `test_pipeline_control_flow.py` | pending | | | | |
-| `test_mcp_tools.py` | pending | | | | |
-| `test_site.py` | pending | | | | |
+| `test_pipeline_execution.py` | PASS | 10 | 0 | 0 | 1 rerun (first attempt failed, retry succeeded) |
+| `test_pipeline_artifacts.py` | PASS | 6 | 0 | 0 | S3 objects + DB records all verified |
+| `test_pipeline_control_flow.py` | PARTIAL | 2 | 1 | 0 | resume + stop pass; error handling test needs investigation |
+| `test_mcp_tools.py` | FAIL | 0 | 7 | 0 | MCP Lambda import error (relative import packaging issue) |
+| `test_site.py` | FAIL | 0 | 3 | 0 | CloudFront returns 403 (ACM/origin config) |
+
+**Total: 18 passed, 11 failed across 29 tests. Pipeline core fully working.**
 
 **Current blocker:** Discovery handler's `_parse_discovery_output` gets empty/non-JSON from Haiku 4.5. The agentic loop completes (4 turns, ~10s) but final text is not valid JSON. Needs handler-level fix (output parsing robustness or model quality tuning).
 

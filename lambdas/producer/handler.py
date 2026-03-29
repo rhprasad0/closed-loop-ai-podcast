@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -108,6 +109,11 @@ def _parse_producer_output(text: str) -> ProducerOutput:
     - PASS verdicts may include notes (str)
     Raises ValueError if validation fails.
     """
+    logger.info(
+        "Parsing producer output",
+        extra={"text_length": len(text), "text_preview": text[:500]},
+    )
+
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
@@ -116,7 +122,17 @@ def _parse_producer_output(text: str) -> ProducerOutput:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
 
-    data: Any = json.loads(stripped)
+    # Try direct parse first
+    data: Any = None
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        # Fallback: extract JSON object from surrounding text
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            data = json.loads(match.group(0))
+        else:
+            raise ValueError(f"No JSON object found in agent response: {stripped[:300]}")
 
     if "verdict" not in data:
         raise ValueError("Missing required field: verdict")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -314,6 +315,11 @@ def _parse_research_output(text: str) -> ResearchOutput:
     Validates notable_repos sub-objects have name, description, stars, language.
     Raises ValueError if required fields missing or validation fails.
     """
+    logger.info(
+        "Parsing research output",
+        extra={"text_length": len(text), "text_preview": text[:500]},
+    )
+
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
@@ -322,7 +328,17 @@ def _parse_research_output(text: str) -> ResearchOutput:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
 
-    data: Any = json.loads(stripped)
+    # Try direct parse first
+    data: Any = None
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        # Fallback: extract JSON object from surrounding text
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            data = json.loads(match.group(0))
+        else:
+            raise ValueError(f"No JSON object found in agent response: {stripped[:300]}")
 
     required_fields = [
         "developer_name",

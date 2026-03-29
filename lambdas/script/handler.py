@@ -121,6 +121,11 @@ def _parse_script_output(text: str) -> ScriptOutput:
     Overwrites character_count with actual len(text) if the model miscounted.
     Raises ValueError if character_count >= 5000 or required fields/segments are wrong.
     """
+    logger.info(
+        "Parsing script output",
+        extra={"text_length": len(text), "text_preview": text[:500]},
+    )
+
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
@@ -129,7 +134,17 @@ def _parse_script_output(text: str) -> ScriptOutput:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
 
-    data: Any = json.loads(stripped)
+    # Try direct parse first
+    data: Any = None
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        # Fallback: extract JSON object from surrounding text
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            data = json.loads(match.group(0))
+        else:
+            raise ValueError(f"No JSON object found in agent response: {stripped[:300]}")
 
     required_fields = [
         "text",

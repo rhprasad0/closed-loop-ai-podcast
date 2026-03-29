@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -126,6 +127,7 @@ def _execute_exa_search(tool_input: dict[str, Any]) -> dict[str, Any]:
         headers={
             "Content-Type": "application/json",
             "x-api-key": api_key,
+            "User-Agent": "zerostars-podcast/1.0",
         },
         method="POST",
     )
@@ -133,7 +135,12 @@ def _execute_exa_search(tool_input: dict[str, Any]) -> dict[str, Any]:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result: dict[str, Any] = json.loads(resp.read())
     except urllib.error.HTTPError as exc:
-        return {"error": f"Exa HTTP error {exc.code}: {exc.reason}"}
+        error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        logger.error(
+            "Exa API error",
+            extra={"status": exc.code, "reason": exc.reason, "body": error_body[:500]},
+        )
+        return {"error": f"Exa HTTP error {exc.code}: {exc.reason}. {error_body[:200]}"}
     return result
 
 
@@ -206,6 +213,11 @@ def _execute_tool(tool_name: str, tool_input: dict[str, Any]) -> str:
 
 def _parse_discovery_output(text: str) -> DiscoveryOutput:
     """Parse agent text response to DiscoveryOutput. Strips markdown fences, validates."""
+    logger.info(
+        "Parsing discovery output",
+        extra={"text_length": len(text), "text_preview": text[:500]},
+    )
+
     # Strip markdown code fences if present
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -217,7 +229,17 @@ def _parse_discovery_output(text: str) -> DiscoveryOutput:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
 
-    data: Any = json.loads(stripped)
+    # Try direct parse first
+    data: Any = None
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        # Fallback: extract JSON object from surrounding text
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            data = json.loads(match.group(0))
+        else:
+            raise ValueError(f"No JSON object found in agent response: {stripped[:300]}")
 
     required_fields = [
         "repo_url",
