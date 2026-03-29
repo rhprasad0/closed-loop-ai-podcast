@@ -6,6 +6,23 @@ Three AI personas — **Hype** (the relentless optimist), **Roast** (dry British
 
 **Live site:** [podcast.ryans-lab.click](https://podcast.ryans-lab.click)
 
+## How This Was Built
+
+The entire codebase was scaffolded by a single autonomous run of [Ralph Wiggum](ralph.sh) — a bash harness that feeds tasks from a spec into Claude (Sonnet), validates each output, auto-commits on success, retries on failure, then runs convergence passes for formatting, linting, and tests until the suite is green. No human in the loop.
+
+**First run results** (2026-03-29):
+
+| Phase | Detail |
+|-------|--------|
+| Model | Claude Sonnet |
+| Wall clock | 1 h 40 min |
+| Build | 53 iterations across 42 tasks — 34 completed, 6 blocked (shared import issue), 2 skipped |
+| Format | Ruff — 1 pass |
+| Lint | Ruff + mypy — 10 iterations, 19 errors → 1 |
+| Tests | pytest — 6 iterations, 165 pass / 31 fail / 11 error → **201 pass / 0 fail / 0 error** |
+
+The 6 blocked tasks were all MCP tool modules that failed validation because an earlier task committed `__init__.py` with absolute imports (`from tools import agents`) that only resolve inside the Lambda runtime, not from the repo root. Sonnet diagnosed the root cause correctly every attempt but couldn't fix it — the file was out of scope for the task. These were fixed by hand after the run.
+
 ## Architecture
 
 ```mermaid
