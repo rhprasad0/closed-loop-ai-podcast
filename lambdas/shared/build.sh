@@ -19,6 +19,7 @@ echo "Installing dependencies into python/..."
 pip install \
     psycopg2-binary==2.9.11 \
     aws-lambda-powertools==3.26.0 \
+    aws-xray-sdk==2.14.0 \
     -t python/ \
     --platform manylinux2014_x86_64 \
     --only-binary=:all: \

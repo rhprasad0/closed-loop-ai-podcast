@@ -93,3 +93,40 @@ PYTHONPATH=lambdas/shared/python pytest tests/e2e/test_site.py -m e2e -v
 | ElevenLabs text-to-dialogue (1-2 calls) | ~$0.50-1.00 |
 | Exa Neural Search (2-4 calls) | ~$0.02-0.05 |
 | **Total** | **~$1-5** |
+
+---
+
+## Execution Log
+
+### Run 1 — 2026-03-29
+
+**Infrastructure deployment:**
+- Terraform plan: 100 resources to add
+- Fixed `observability.tf`: `extended_statistics` → `extended_statistic` (9 occurrences)
+- Fixed `step-functions.tf`: added CloudWatch Logs permissions to SFN IAM role
+- Terraform apply: 112 resources created (100 planned + 11 on second apply + 1 change)
+- All outputs match `.env`: state_machine_arn, s3_bucket_name, site_url
+- Fixed `step-functions.tf`: added `resume_from = ""` to InitializeMetadata (Choice state requires variable to exist)
+- Fixed `lambdas/shared/build.sh`: added `aws-xray-sdk==2.14.0` (Powertools Tracer dependency missing from layer)
+- Fixed `terraform/lambdas.tf`: `handler.handler` → `handler.lambda_handler` (8 Lambdas)
+
+**Test results:**
+
+| File | Status | Passed | Failed | Skipped | Notes |
+|------|--------|--------|--------|---------|-------|
+| `test_pipeline_execution.py` | blocked | 0 | 1 | 9 | Bedrock model access not enabled |
+| `test_pipeline_artifacts.py` | blocked | 0 | 0 | 6 | Depends on pipeline success |
+| `test_pipeline_control_flow.py` | pending | | | | |
+| `test_mcp_tools.py` | pending | | | | |
+| `test_site.py` | pending | | | | |
+
+**Blocker:** Bedrock model access not enabled in account `407645373626`. The Discovery Lambda calls `us.anthropic.claude-sonnet-4-6` via Bedrock `InvokeModel` and gets `ResourceNotFoundException`. Action required:
+1. AWS Console → Bedrock → Model access → Request access to Claude Sonnet 4.6 and Nova Canvas
+2. Re-run tests after approval
+
+**Infrastructure fixes discovered during deployment:**
+1. `observability.tf`: `extended_statistics` → `extended_statistic` (terraform plan error)
+2. `step-functions.tf`: added `resume_from = ""` to InitializeMetadata (SFN Choice state runtime error)
+3. `step-functions.tf`: added CloudWatch Logs IAM permissions for SFN (AccessDeniedException on state machine creation)
+4. `lambdas/shared/build.sh`: added `aws-xray-sdk==2.14.0` (missing Powertools Tracer dependency)
+5. `terraform/lambdas.tf`: `handler.handler` → `handler.lambda_handler` (HandlerNotFound error)

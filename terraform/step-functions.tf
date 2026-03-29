@@ -37,6 +37,23 @@ resource "aws_iam_role_policy" "sfn_pipeline" {
         Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"]
         Resource = "*"
       },
+      {
+        # CloudWatch Logs for Step Functions execution logging
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogDelivery",
+          "logs:CreateLogStream",
+          "logs:GetLogDelivery",
+          "logs:UpdateLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutLogEvents",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups",
+        ]
+        Resource = "*"
+      },
     ]
   })
 }
@@ -58,6 +75,7 @@ resource "aws_sfn_state_machine" "pipeline" {
           metadata = {
             "execution_id.$" = "$$.Execution.Id"
             script_attempt   = 1
+            resume_from      = ""
           }
         }
         Next = "ResumeRouter"

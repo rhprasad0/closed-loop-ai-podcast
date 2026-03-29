@@ -76,7 +76,7 @@ resource "aws_lambda_function" "discovery" {
   filename         = data.archive_file.discovery.output_path
   source_code_hash = data.archive_file.discovery.output_base64sha256
   role             = aws_iam_role.discovery.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
   timeout          = 300
@@ -160,7 +160,7 @@ resource "aws_lambda_function" "research" {
   filename         = data.archive_file.research.output_path
   source_code_hash = data.archive_file.research.output_base64sha256
   role             = aws_iam_role.research.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
   timeout          = 300
@@ -243,7 +243,7 @@ resource "aws_lambda_function" "script" {
   filename         = data.archive_file.script.output_path
   source_code_hash = data.archive_file.script.output_base64sha256
   role             = aws_iam_role.script.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
   timeout          = 300
@@ -326,7 +326,7 @@ resource "aws_lambda_function" "producer" {
   filename         = data.archive_file.producer.output_path
   source_code_hash = data.archive_file.producer.output_base64sha256
   role             = aws_iam_role.producer.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
   timeout          = 300
@@ -415,7 +415,7 @@ resource "aws_lambda_function" "cover_art" {
   filename         = data.archive_file.cover_art.output_path
   source_code_hash = data.archive_file.cover_art.output_base64sha256
   role             = aws_iam_role.cover_art.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
   timeout          = 300
@@ -504,7 +504,7 @@ resource "aws_lambda_function" "tts" {
   filename         = data.archive_file.tts.output_path
   source_code_hash = data.archive_file.tts.output_base64sha256
   role             = aws_iam_role.tts.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 512
   timeout          = 300
@@ -591,7 +591,7 @@ resource "aws_lambda_function" "post_production" {
   filename         = data.archive_file.post_production.output_path
   source_code_hash = data.archive_file.post_production.output_base64sha256
   role             = aws_iam_role.post_production.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 1024 # ffmpeg video processing requires more memory
   timeout          = 300
@@ -683,7 +683,7 @@ resource "aws_lambda_function" "site" {
   filename         = data.archive_file.site.output_path
   source_code_hash = data.archive_file.site.output_base64sha256
   role             = aws_iam_role.site.arn
-  handler          = "handler.handler"
+  handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   memory_size      = 256
   timeout          = 30

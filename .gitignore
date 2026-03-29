@@ -8,6 +8,7 @@ __pycache__/
 .env
 .terraform/
 terraform.tfstate*
+terraform.tfvars
 .terraform.lock.hcl
 
 ralph-*.log

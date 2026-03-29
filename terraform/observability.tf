@@ -99,7 +99,7 @@ resource "aws_cloudwatch_metric_alarm" "discovery_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -152,7 +152,7 @@ resource "aws_cloudwatch_metric_alarm" "research_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -205,7 +205,7 @@ resource "aws_cloudwatch_metric_alarm" "script_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -258,7 +258,7 @@ resource "aws_cloudwatch_metric_alarm" "producer_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -311,7 +311,7 @@ resource "aws_cloudwatch_metric_alarm" "cover_art_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -364,7 +364,7 @@ resource "aws_cloudwatch_metric_alarm" "tts_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -417,7 +417,7 @@ resource "aws_cloudwatch_metric_alarm" "post_production_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
@@ -470,7 +470,7 @@ resource "aws_cloudwatch_metric_alarm" "site_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   # Site Lambda timeout is 30s; 90% = 27,000ms. The shared variable defaults to 270,000ms (90% of 300s).
   # Override not possible without a separate variable — operators should set lambda_timeout_threshold_ms
   # to 27000 if they want accurate near-timeout alerting for the site Lambda.
@@ -526,7 +526,7 @@ resource "aws_cloudwatch_metric_alarm" "mcp_duration" {
   metric_name         = "Duration"
   namespace           = "AWS/Lambda"
   period              = 300
-  extended_statistics = "p99"
+  extended_statistic = "p99"
   threshold           = var.lambda_timeout_threshold_ms
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
