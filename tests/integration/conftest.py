@@ -151,7 +151,7 @@ def bedrock_model_override() -> Generator[None, None, None]:
     import shared.bedrock as bedrock_module
 
     original_value = os.environ.get("BEDROCK_MODEL_ID")
-    os.environ["BEDROCK_MODEL_ID"] = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    os.environ["BEDROCK_MODEL_ID"] = "us.anthropic.claude-sonnet-4-6"
     importlib.reload(bedrock_module)
     yield
     if original_value is None:
