@@ -14,11 +14,15 @@
       "tests/integration/__init__.py",
       "tests/e2e/__init__.py"
     ],
-    "spec_files": ["ci-pipeline.md", "packaging-and-deployment.md", "file-manifest.md"],
+    "spec_files": [
+      "ci-pipeline.md",
+      "packaging-and-deployment.md",
+      "file-manifest.md"
+    ],
     "context_files": [],
     "depends_on": [],
     "validation": "cd /workspaces/closed-loop-ai-podcast && python3 -c 'import tomllib; tomllib.load(open(\"pyproject.toml\", \"rb\"))'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -29,9 +33,14 @@
     "output_files": [
       "lambdas/shared/python/shared/types.py"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md"
+    ],
     "context_files": [],
-    "depends_on": ["p0-scaffold"],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.types import PipelineState, DiscoveryOutput, ResearchOutput, ScriptOutput, ProducerOutput, CoverArtOutput, TTSOutput, PostProductionOutput'",
     "status": "pending",
     "attempts": 0
@@ -46,9 +55,14 @@
       "lambdas/shared/python/shared/tracing.py",
       "lambdas/shared/python/shared/metrics.py"
     ],
-    "spec_files": ["instrumentation.md", "type-checking.md"],
+    "spec_files": [
+      "instrumentation.md",
+      "type-checking.md"
+    ],
     "context_files": [],
-    "depends_on": ["p0-scaffold"],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.logging import get_logger; from shared.tracing import get_tracer; from shared.metrics import get_metrics'",
     "status": "pending",
     "attempts": 0
@@ -61,14 +75,20 @@
     "output_files": [
       "lambdas/shared/python/shared/bedrock.py"
     ],
-    "spec_files": ["type-checking.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/logging.py",
       "lambdas/shared/python/shared/tracing.py",
       "lambdas/shared/python/shared/metrics.py"
     ],
-    "depends_on": ["p1-types", "p1-observability"],
+    "depends_on": [
+      "p1-types",
+      "p1-observability"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.bedrock import invoke_model, invoke_with_tools'",
     "status": "pending",
     "attempts": 0
@@ -83,12 +103,18 @@
       "lambdas/shared/python/shared/s3.py",
       "lambdas/shared/python/shared/__init__.py"
     ],
-    "spec_files": ["type-checking.md", "external-api-contracts.md", "file-manifest.md"],
+    "spec_files": [
+      "type-checking.md",
+      "external-api-contracts.md",
+      "file-manifest.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/logging.py",
       "lambdas/shared/python/shared/tracing.py"
     ],
-    "depends_on": ["p1-observability"],
+    "depends_on": [
+      "p1-observability"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.db import get_connection, query, execute; from shared.s3 import upload_bytes, upload_file, download_file, generate_presigned_url'",
     "status": "pending",
     "attempts": 0
@@ -102,7 +128,11 @@
       "lambdas/discovery/handler.py",
       "lambdas/discovery/prompts/discovery.md"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/bedrock.py",
@@ -110,7 +140,10 @@
       "lambdas/shared/python/shared/s3.py",
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p1-bedrock", "p1-db-s3"],
+    "depends_on": [
+      "p1-bedrock",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.discovery.handler import lambda_handler, _parse_discovery_output'",
     "status": "pending",
     "attempts": 0
@@ -124,14 +157,21 @@
       "lambdas/research/handler.py",
       "lambdas/research/prompts/research.md"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/bedrock.py",
       "lambdas/shared/python/shared/logging.py",
       "lambdas/discovery/handler.py"
     ],
-    "depends_on": ["p1-bedrock", "p1-db-s3"],
+    "depends_on": [
+      "p1-bedrock",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.research.handler import lambda_handler, _parse_research_output'",
     "status": "pending",
     "attempts": 0
@@ -145,14 +185,19 @@
       "lambdas/script/handler.py",
       "lambdas/script/prompts/script.md"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/bedrock.py",
       "lambdas/shared/python/shared/logging.py",
       "lambdas/discovery/handler.py"
     ],
-    "depends_on": ["p1-bedrock"],
+    "depends_on": [
+      "p1-bedrock"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.script.handler import lambda_handler, _parse_script_output'",
     "status": "pending",
     "attempts": 0
@@ -166,7 +211,11 @@
       "lambdas/producer/handler.py",
       "lambdas/producer/prompts/producer.md"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/bedrock.py",
@@ -174,7 +223,10 @@
       "lambdas/shared/python/shared/logging.py",
       "lambdas/discovery/handler.py"
     ],
-    "depends_on": ["p1-bedrock", "p1-db-s3"],
+    "depends_on": [
+      "p1-bedrock",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.producer.handler import lambda_handler, _parse_producer_output'",
     "status": "pending",
     "attempts": 0
@@ -188,14 +240,21 @@
       "lambdas/cover_art/handler.py",
       "lambdas/cover_art/prompts/cover_art.md"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/s3.py",
       "lambdas/shared/python/shared/logging.py",
       "lambdas/discovery/handler.py"
     ],
-    "depends_on": ["p1-bedrock", "p1-db-s3"],
+    "depends_on": [
+      "p1-bedrock",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.cover_art.handler import lambda_handler, _generate_image'",
     "status": "pending",
     "attempts": 0
@@ -208,13 +267,19 @@
     "output_files": [
       "lambdas/tts/handler.py"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/s3.py",
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p1-db-s3"],
+    "depends_on": [
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.tts.handler import lambda_handler, _parse_dialogue_turns'",
     "status": "pending",
     "attempts": 0
@@ -227,14 +292,21 @@
     "output_files": [
       "lambdas/post_production/handler.py"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "database-schema.md", "external-api-contracts.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "database-schema.md",
+      "external-api-contracts.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/db.py",
       "lambdas/shared/python/shared/s3.py",
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p1-db-s3"],
+    "depends_on": [
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.post_production.handler import lambda_handler'",
     "status": "pending",
     "attempts": 0
@@ -249,13 +321,19 @@
       "lambdas/site/templates/base.html",
       "lambdas/site/templates/index.html"
     ],
-    "spec_files": ["type-checking.md", "interface-contracts.md", "file-manifest.md"],
+    "spec_files": [
+      "type-checking.md",
+      "interface-contracts.md",
+      "file-manifest.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/db.py",
       "lambdas/shared/python/shared/s3.py"
     ],
-    "depends_on": ["p1-db-s3"],
+    "depends_on": [
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.site.handler import lambda_handler'",
     "status": "pending",
     "attempts": 0
@@ -268,9 +346,13 @@
     "output_files": [
       "sql/schema.sql"
     ],
-    "spec_files": ["database-schema.md"],
+    "spec_files": [
+      "database-schema.md"
+    ],
     "context_files": [],
-    "depends_on": ["p0-scaffold"],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -287,9 +369,13 @@
       "lambdas/site/build.sh",
       "lambdas/mcp/build.sh"
     ],
-    "spec_files": ["packaging-and-deployment.md"],
+    "spec_files": [
+      "packaging-and-deployment.md"
+    ],
     "context_files": [],
-    "depends_on": ["p0-scaffold"],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && bash -n build-all.sh && bash -n lambdas/shared/build.sh && bash -n layers/ffmpeg/build.sh",
     "status": "pending",
     "attempts": 0
@@ -302,9 +388,15 @@
     "output_files": [
       ".github/workflows/ci.yml"
     ],
-    "spec_files": ["ci-pipeline.md"],
-    "context_files": ["pyproject.toml"],
-    "depends_on": ["p0-scaffold"],
+    "spec_files": [
+      "ci-pipeline.md"
+    ],
+    "context_files": [
+      "pyproject.toml"
+    ],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -319,9 +411,13 @@
       "terraform/variables.tf",
       "terraform/outputs.tf"
     ],
-    "spec_files": ["terraform-resource-map.md"],
+    "spec_files": [
+      "terraform-resource-map.md"
+    ],
     "context_files": [],
-    "depends_on": ["p0-scaffold"],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -337,12 +433,17 @@
       "terraform/s3.tf",
       "terraform/secrets.tf"
     ],
-    "spec_files": ["terraform-resource-map.md", "step-functions-asl.md"],
+    "spec_files": [
+      "terraform-resource-map.md",
+      "step-functions-asl.md"
+    ],
     "context_files": [
       "terraform/main.tf",
       "terraform/variables.tf"
     ],
-    "depends_on": ["p3-tf-core"],
+    "depends_on": [
+      "p3-tf-core"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -357,13 +458,19 @@
       "terraform/observability.tf",
       "terraform/mcp.tf"
     ],
-    "spec_files": ["terraform-resource-map.md", "observability.md", "mcp-server.md"],
+    "spec_files": [
+      "terraform-resource-map.md",
+      "observability.md",
+      "mcp-server.md"
+    ],
     "context_files": [
       "terraform/main.tf",
       "terraform/variables.tf",
       "terraform/lambdas.tf"
     ],
-    "depends_on": ["p3-tf-app"],
+    "depends_on": [
+      "p3-tf-app"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -376,12 +483,16 @@
     "output_files": [
       "lambdas/mcp/handler.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/types.py",
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p1-db-s3"],
+    "depends_on": [
+      "p1-db-s3"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -394,12 +505,16 @@
     "output_files": [
       "lambdas/mcp/resources.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/db.py",
       "lambdas/shared/python/shared/types.py"
     ],
-    "depends_on": ["p1-db-s3"],
+    "depends_on": [
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.resources'",
     "status": "pending",
     "attempts": 0
@@ -412,9 +527,13 @@
     "output_files": [
       "lambdas/mcp/tools/__init__.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [],
-    "depends_on": ["p0-scaffold"],
+    "depends_on": [
+      "p0-scaffold"
+    ],
     "validation": null,
     "status": "pending",
     "attempts": 0
@@ -427,11 +546,15 @@
     "output_files": [
       "lambdas/mcp/tools/pipeline.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p4-mcp-init"],
+    "depends_on": [
+      "p4-mcp-init"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.tools.pipeline'",
     "status": "pending",
     "attempts": 0
@@ -444,11 +567,15 @@
     "output_files": [
       "lambdas/mcp/tools/agents.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p4-mcp-init"],
+    "depends_on": [
+      "p4-mcp-init"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.tools.agents'",
     "status": "pending",
     "attempts": 0
@@ -461,11 +588,15 @@
     "output_files": [
       "lambdas/mcp/tools/observation.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p4-mcp-init"],
+    "depends_on": [
+      "p4-mcp-init"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.tools.observation'",
     "status": "pending",
     "attempts": 0
@@ -478,12 +609,17 @@
     "output_files": [
       "lambdas/mcp/tools/data.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/db.py",
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p4-mcp-init", "p1-db-s3"],
+    "depends_on": [
+      "p4-mcp-init",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.tools.data'",
     "status": "pending",
     "attempts": 0
@@ -496,12 +632,17 @@
     "output_files": [
       "lambdas/mcp/tools/assets.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/s3.py",
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p4-mcp-init", "p1-db-s3"],
+    "depends_on": [
+      "p4-mcp-init",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.tools.assets'",
     "status": "pending",
     "attempts": 0
@@ -514,11 +655,15 @@
     "output_files": [
       "lambdas/mcp/tools/site.py"
     ],
-    "spec_files": ["mcp-server.md"],
+    "spec_files": [
+      "mcp-server.md"
+    ],
     "context_files": [
       "lambdas/shared/python/shared/logging.py"
     ],
-    "depends_on": ["p4-mcp-init"],
+    "depends_on": [
+      "p4-mcp-init"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import lambdas.mcp.tools.site'",
     "status": "pending",
     "attempts": 0
@@ -535,7 +680,10 @@
     "context_files": [
       "lambdas/shared/python/shared/types.py"
     ],
-    "depends_on": ["p0-scaffold", "p1-types"],
+    "depends_on": [
+      "p0-scaffold",
+      "p1-types"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import tests.conftest'",
     "status": "pending",
     "attempts": 0
@@ -557,7 +705,11 @@
       "lambdas/shared/python/shared/s3.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p1-bedrock", "p1-db-s3"],
+    "depends_on": [
+      "p5-conftest",
+      "p1-bedrock",
+      "p1-db-s3"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_shared/ --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -575,7 +727,10 @@
       "lambdas/discovery/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-discovery"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-discovery"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_discovery.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -593,7 +748,10 @@
       "lambdas/research/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-research"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-research"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_research.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -611,7 +769,10 @@
       "lambdas/script/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-script"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-script"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_script.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -629,7 +790,10 @@
       "lambdas/producer/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-producer"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-producer"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_producer.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -647,7 +811,10 @@
       "lambdas/cover_art/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-cover-art"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-cover-art"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_cover_art.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -665,7 +832,10 @@
       "lambdas/tts/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-tts"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-tts"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_tts.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -683,7 +853,10 @@
       "lambdas/post_production/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p2-post-prod"],
+    "depends_on": [
+      "p5-conftest",
+      "p2-post-prod"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_post_production.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -701,7 +874,10 @@
       "lambdas/site/handler.py",
       "tests/conftest.py"
     ],
-    "depends_on": ["p5-conftest", "p3-site"],
+    "depends_on": [
+      "p5-conftest",
+      "p3-site"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_site.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -719,7 +895,10 @@
       "tests/conftest.py",
       "lambdas/mcp/handler.py"
     ],
-    "depends_on": ["p5-conftest", "p4-mcp-handler"],
+    "depends_on": [
+      "p5-conftest",
+      "p4-mcp-handler"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'import tests.unit.test_mcp.conftest'",
     "status": "pending",
     "attempts": 0
@@ -741,7 +920,12 @@
       "lambdas/mcp/tools/observation.py",
       "tests/unit/test_mcp/conftest.py"
     ],
-    "depends_on": ["p5-test-mcp-conftest", "p4-mcp-pipeline", "p4-mcp-agents", "p4-mcp-observation"],
+    "depends_on": [
+      "p5-test-mcp-conftest",
+      "p4-mcp-pipeline",
+      "p4-mcp-agents",
+      "p4-mcp-observation"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_mcp/test_pipeline.py tests/unit/test_mcp/test_agents.py tests/unit/test_mcp/test_observation.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -763,7 +947,12 @@
       "lambdas/mcp/tools/site.py",
       "tests/unit/test_mcp/conftest.py"
     ],
-    "depends_on": ["p5-test-mcp-conftest", "p4-mcp-data", "p4-mcp-assets", "p4-mcp-site"],
+    "depends_on": [
+      "p5-test-mcp-conftest",
+      "p4-mcp-data",
+      "p4-mcp-assets",
+      "p4-mcp-site"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_mcp/test_data.py tests/unit/test_mcp/test_assets.py tests/unit/test_mcp/test_site.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
@@ -783,7 +972,11 @@
       "lambdas/mcp/handler.py",
       "tests/unit/test_mcp/conftest.py"
     ],
-    "depends_on": ["p5-test-mcp-conftest", "p4-mcp-handler", "p4-mcp-resources"],
+    "depends_on": [
+      "p5-test-mcp-conftest",
+      "p4-mcp-handler",
+      "p4-mcp-resources"
+    ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python pytest tests/unit/test_mcp/test_resources.py tests/unit/test_mcp/test_handler.py --collect-only 2>&1 | tail -5",
     "status": "pending",
     "attempts": 0
