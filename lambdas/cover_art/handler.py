@@ -163,8 +163,8 @@ def _generate_image(prompt: str) -> bytes:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: PipelineState, context: LambdaContext) -> CoverArtOutput:
     execution_id = event.get("metadata", {}).get("execution_id", "unknown")
     logger.info("Starting cover art generation", extra={"execution_id": execution_id})
@@ -172,9 +172,9 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> CoverArtOutp
     script = event.get("script", {})
     discovery = event.get("discovery", {})
 
-    cover_art_suggestion: str = script.get("cover_art_suggestion", "")  # type: ignore[union-attr]
-    repo_name: str = discovery.get("repo_name", "unknown")  # type: ignore[union-attr]
-    language: str = discovery.get("language", "")  # type: ignore[union-attr]
+    cover_art_suggestion: str = script.get("cover_art_suggestion", "")
+    repo_name: str = discovery.get("repo_name", "unknown")
+    language: str = discovery.get("language", "")
 
     prompt = _build_cover_art_prompt(
         cover_art_suggestion=cover_art_suggestion,

@@ -132,7 +132,7 @@ def _insert_episode(
     with conn.cursor() as cur:
         cur.execute(sql, params)
         row = cur.fetchone()
-    episode_id: int = row[0]  # type: ignore[index]
+    episode_id: int = row[0]
     return episode_id
 
 

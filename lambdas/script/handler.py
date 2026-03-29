@@ -54,7 +54,7 @@ def _build_user_message(event: PipelineState) -> str:
     discovery = event["discovery"]
     research = event["research"]
     metadata = event.get("metadata", {})
-    script_attempt: int = metadata.get("script_attempt", 1)  # type: ignore[union-attr]
+    script_attempt: int = metadata.get("script_attempt", 1)
 
     lines: list[str] = [
         "## Discovery Data",
@@ -174,13 +174,13 @@ def _parse_script_output(text: str) -> ScriptOutput:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: PipelineState, context: LambdaContext) -> ScriptOutput:
     system_prompt = _load_system_prompt()
     metadata = event.get("metadata", {})
-    execution_id: str = metadata.get("execution_id", "unknown")  # type: ignore[union-attr]
-    script_attempt: int = metadata.get("script_attempt", 1)  # type: ignore[union-attr]
+    execution_id: str = metadata.get("execution_id", "unknown")
+    script_attempt: int = metadata.get("script_attempt", 1)
     logger.info(
         "Starting script generation",
         extra={"execution_id": execution_id, "script_attempt": script_attempt},

@@ -6,7 +6,6 @@ from typing import Any
 
 import resources as resources_module
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from mcp.server.fastmcp import FastMCP
 from tools import agents as agents_tools
 from tools import assets as assets_tools
 from tools import data as data_tools
@@ -14,6 +13,7 @@ from tools import observation as observation_tools
 from tools import pipeline as pipeline_tools
 from tools import site as site_tools
 
+from mcp.server.fastmcp import FastMCP
 from shared.logging import get_logger
 from shared.metrics import get_metrics
 from shared.tracing import get_tracer
@@ -168,8 +168,8 @@ async def _asgi_adapter(event: dict[str, Any], asgi_app: Any) -> dict[str, Any]:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     """Lambda entry point for the MCP control-plane server.
 

@@ -31,7 +31,7 @@ def _get_sfn_client() -> Any:
 def _serialize(value: object) -> object:
     """Convert non-JSON-serializable DB values (dates, datetimes) to strings."""
     if hasattr(value, "isoformat"):
-        return value.isoformat()  # type: ignore[union-attr]
+        return value.isoformat()
     return value
 
 

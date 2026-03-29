@@ -150,12 +150,12 @@ def _parse_producer_output(text: str) -> ProducerOutput:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: PipelineState, context: LambdaContext) -> ProducerOutput:
     system_prompt = _load_system_prompt()
     metadata = event.get("metadata", {})
-    execution_id: str = metadata.get("execution_id", "unknown")  # type: ignore[union-attr]
+    execution_id: str = metadata.get("execution_id", "unknown")
     logger.info("Starting producer evaluation", extra={"execution_id": execution_id})
 
     benchmarks = _fetch_benchmark_scripts()

@@ -4,7 +4,6 @@ import json
 import os
 import re
 import urllib.request
-from typing import Any
 
 import boto3
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -49,7 +48,7 @@ def _get_elevenlabs_api_key() -> str:
     global _elevenlabs_api_key
     if _elevenlabs_api_key is None:
         client = boto3.client("secretsmanager")
-        response: dict[str, Any] = client.get_secret_value(SecretId="zerostars/elevenlabs-api-key")
+        response = client.get_secret_value(SecretId="zerostars/elevenlabs-api-key")
         _elevenlabs_api_key = response["SecretString"]
     return _elevenlabs_api_key
 
@@ -114,14 +113,14 @@ def _call_elevenlabs(inputs: list[dict[str, str]]) -> bytes:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: PipelineState, context: LambdaContext) -> TTSOutput:
     execution_id = event.get("metadata", {}).get("execution_id", "unknown")
     logger.info("Starting TTS generation", extra={"execution_id": execution_id})
 
     script = event.get("script", {})
-    script_text: str = script.get("text", "")  # type: ignore[union-attr]
+    script_text: str = script.get("text", "")
     character_count: int = len(script_text)
 
     logger.info("Parsing dialogue turns", extra={"character_count": character_count})

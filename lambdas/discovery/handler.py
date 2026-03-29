@@ -254,8 +254,8 @@ def _parse_discovery_output(text: str) -> DiscoveryOutput:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOutput:
     system_prompt = _load_system_prompt()
     execution_id = event.get("metadata", {}).get("execution_id", "unknown")

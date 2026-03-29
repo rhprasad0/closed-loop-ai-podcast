@@ -9,7 +9,7 @@ All tools connect to Postgres via shared.db using DB_CONNECTION_STRING.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
 import shared.db as db
 
@@ -75,7 +75,7 @@ async def query_episodes(
 
     count_sql = f"SELECT COUNT(*) FROM episodes {where_clause}"
     count_rows = db.query(count_sql, tuple(params) if params else None)
-    total_count: int = int(count_rows[0][0]) if count_rows else 0
+    total_count: int = cast(int, count_rows[0][0]) if count_rows else 0
 
     # order_by and order are validated above — safe to interpolate directly.
     select_sql = f"""

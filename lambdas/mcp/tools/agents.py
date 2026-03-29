@@ -14,10 +14,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-from botocore.client import BaseClient
 
 # Module-level client — reassign at module scope in tests to inject a mock.
-LAMBDA_CLIENT: BaseClient = boto3.client("lambda")
+LAMBDA_CLIENT: Any = boto3.client("lambda")
 
 
 def _now_tag() -> str:

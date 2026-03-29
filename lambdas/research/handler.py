@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -236,7 +237,7 @@ def _execute_search_repositories(tool_input: dict[str, Any]) -> dict[str, Any]:
     per_page: int = tool_input.get("per_page", 10)
     url = (
         f"https://api.github.com/search/repositories"
-        f"?q={urllib.request.quote(query)}&sort={sort}&per_page={per_page}"
+        f"?q={urllib.parse.quote(query)}&sort={sort}&per_page={per_page}"
     )
     req = urllib.request.Request(
         url,
@@ -373,8 +374,8 @@ def _parse_research_output(text: str) -> ResearchOutput:
 
 
 @logger.inject_lambda_context(clear_state=True)
-@tracer.capture_lambda_handler  # type: ignore[misc]
-@metrics.log_metrics  # type: ignore[misc]
+@tracer.capture_lambda_handler
+@metrics.log_metrics
 def lambda_handler(event: PipelineState, context: LambdaContext) -> ResearchOutput:
     system_prompt = _load_system_prompt()
     execution_id = event.get("metadata", {}).get("execution_id", "unknown")
