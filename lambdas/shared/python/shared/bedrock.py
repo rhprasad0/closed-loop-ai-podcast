@@ -23,6 +23,23 @@ Effort = Literal["low", "medium", "high", "max"]
 DEFAULT_EFFORT_AGENTIC: Effort = "high"
 DEFAULT_EFFORT_SINGLE_TURN: Effort = "medium"
 
+# Prefixes/substrings that identify models NOT supporting adaptive thinking
+# or output_config.effort (Claude 3.x and earlier).
+_NO_ADAPTIVE_THINKING_PATTERNS: tuple[str, ...] = (
+    "claude-3-haiku",
+    "claude-3-5-haiku",
+    "claude-3-sonnet",
+    "claude-3-5-sonnet",
+    "claude-3-opus",
+    "claude-instant",
+)
+
+
+def _supports_adaptive_thinking(model_id: str) -> bool:
+    """Return True if the model supports adaptive thinking (output_config.effort)."""
+    model_lower = model_id.lower()
+    return not any(p in model_lower for p in _NO_ADAPTIVE_THINKING_PATTERNS)
+
 
 def _get_bedrock_client() -> Any:
     """Return a boto3 bedrock-runtime client."""
@@ -72,7 +89,7 @@ def _extract_text(content: list[dict[str, Any]]) -> str:
 def invoke_model(
     user_message: str,
     system_prompt: str,
-    model_id: str = DEFAULT_MODEL_ID,
+    model_id: str | None = None,
     max_tokens: int = MAX_TOKENS,
     effort: Effort = DEFAULT_EFFORT_SINGLE_TURN,
 ) -> str:
@@ -82,14 +99,17 @@ def invoke_model(
     Handles ThrottlingException with exponential backoff (3 retries, 1s base, 2x factor).
     Returns the text content of the model's response.
     """
+    if model_id is None:
+        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
     body: dict[str, Any] = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": max_tokens,
-        "thinking": {"type": "adaptive"},
-        "output_config": {"effort": effort},
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_message}],
     }
+    if _supports_adaptive_thinking(model_id):
+        body["thinking"] = {"type": "adaptive"}
+        body["output_config"] = {"effort": effort}
     result = _invoke_with_retry(body, model_id)
     return _extract_text(result["content"])
 
@@ -99,7 +119,7 @@ def invoke_with_tools(
     system_prompt: str,
     tools: list[ToolDefinition],
     tool_executor: ToolExecutor,
-    model_id: str = DEFAULT_MODEL_ID,
+    model_id: str | None = None,
     max_tokens: int = MAX_TOKENS,
     max_turns: int = 25,
     effort: Effort = DEFAULT_EFFORT_AGENTIC,
@@ -120,18 +140,21 @@ def invoke_with_tools(
 
     ThrottlingException is retried per _invoke_with_retry on each individual call.
     """
+    if model_id is None:
+        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
 
     for turn in range(max_turns):
         body: dict[str, Any] = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": max_tokens,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": effort},
             "system": system_prompt,
             "messages": messages,
             "tools": tools,
         }
+        if _supports_adaptive_thinking(model_id):
+            body["thinking"] = {"type": "adaptive"}
+            body["output_config"] = {"effort": effort}
         result = _invoke_with_retry(body, model_id)
         stop_reason: str = result["stop_reason"]
         content: list[dict[str, Any]] = result["content"]

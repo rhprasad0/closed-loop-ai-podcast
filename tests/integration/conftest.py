@@ -18,6 +18,7 @@ import boto3
 import pytest
 from pytest_httpserver import HTTPServer
 
+from tests.integration.twins.bedrock_twin import setup_bedrock_twin
 from tests.integration.twins.elevenlabs_twin import setup_elevenlabs_twin
 from tests.integration.twins.exa_twin import setup_exa_twin
 from tests.integration.twins.fixtures import FEATURED_DEVELOPERS
@@ -151,7 +152,7 @@ def bedrock_model_override() -> Generator[None, None, None]:
     import shared.bedrock as bedrock_module
 
     original_value = os.environ.get("BEDROCK_MODEL_ID")
-    os.environ["BEDROCK_MODEL_ID"] = "us.anthropic.claude-sonnet-4-6"
+    os.environ["BEDROCK_MODEL_ID"] = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
     importlib.reload(bedrock_module)
     yield
     if original_value is None:
@@ -159,6 +160,24 @@ def bedrock_model_override() -> Generator[None, None, None]:
     else:
         os.environ["BEDROCK_MODEL_ID"] = original_value
     importlib.reload(bedrock_module)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def bedrock_twin(bedrock_model_override: None) -> Generator[None, None, None]:
+    """Monkeypatch shared.bedrock._get_bedrock_client to return the mock Bedrock client.
+
+    Depends on bedrock_model_override so it runs after that fixture reloads the
+    shared.bedrock module, ensuring the patch is applied to the correct module object.
+    The mock returns deterministic, schema-valid responses for each handler without
+    making real Bedrock API calls.
+    """
+    import shared.bedrock as bedrock_module
+
+    mock_client = setup_bedrock_twin()
+    mp = pytest.MonkeyPatch()
+    mp.setattr(bedrock_module, "_get_bedrock_client", lambda: mock_client)
+    yield
+    mp.undo()
 
 
 @pytest.fixture(scope="session")
