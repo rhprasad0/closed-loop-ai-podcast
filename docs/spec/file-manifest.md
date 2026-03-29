@@ -173,7 +173,7 @@ Every file below must be created. No other files should be created.
 | `lambdas/post_production/handler.py` | Post-production. Downloads cover art PNG and MP3 from S3. Runs ffmpeg to produce MP4. Uploads MP4 to S3. Writes episode record to Postgres `episodes` table. Writes to `featured_developers` table. |
 | `lambdas/mcp/handler.py` | MCP server Lambda entry point. Streamable HTTP transport. See [MCP Server](./mcp-server.md). |
 | `lambdas/mcp/resources.py` | MCP resource handlers (pipeline status, recent episodes, etc.). |
-| `lambdas/mcp/tools/__init__.py` | Package init for MCP tools. |
+| `lambdas/mcp/tools/__init__.py` | Package init for MCP tools. Re-exports all 6 tool modules and provides `register_all_tools()`. **Build order: must be created after all 6 tool modules** (pipeline, agents, observation, data, assets, site) because it eagerly imports them via `from . import ...`. |
 | `lambdas/mcp/tools/pipeline.py` | Pipeline control tools: `start_pipeline`, `stop_pipeline`, `get_execution_status`, `list_executions`, `retry_from_step`. |
 | `lambdas/mcp/tools/agents.py` | Agent invocation tools: `invoke_discovery` through `invoke_post_production` (7 tools). |
 | `lambdas/mcp/tools/observation.py` | Observation tools: `get_agent_logs`, `get_execution_history`, `get_pipeline_health`. |

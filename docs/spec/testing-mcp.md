@@ -4,6 +4,18 @@
 
 Tests for the [MCP Server](./mcp-server.md) — 26 tools, 5 resources, Lambda handler. Same conventions as [pipeline testing](./testing.md): `unittest.mock` for AWS services, `moto` for S3, `@pytest.mark.integration` for real services.
 
+> **Spec erratum (2026-03-29) — validation strategy for automated builds:** `tools/__init__.py` eagerly imports all 6 tool modules (`from . import agents, ...`). Any validation command that uses a package-level import (e.g., `python3 -c 'import lambdas.mcp.tools.pipeline'`) triggers this init and cascade-fails if sibling modules don't exist yet. In the first ralph wiggum run, this blocked all 6 tool module tasks.
+>
+> For incremental/automated builds, validate individual tool modules with file-level checks that bypass `__init__.py`:
+> ```bash
+> # Syntax-only (no import side effects):
+> python3 -c 'import ast; ast.parse(open("lambdas/mcp/tools/pipeline.py").read())'
+>
+> # Direct import (avoids __init__.py):
+> cd lambdas/mcp && PYTHONPATH=../shared/python python3 -c 'from tools import pipeline'
+> ```
+> Full package-level validation (`import lambdas.mcp.tools.pipeline`) should only run after all 6 tool modules and `__init__.py` are complete.
+
 ### Directory Structure
 
 ```

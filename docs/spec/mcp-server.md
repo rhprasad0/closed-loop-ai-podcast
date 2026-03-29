@@ -920,6 +920,10 @@ lambdas/mcp/
 
 `handler.py` creates the MCP server instance, registers all tools and resources, and wires up the Streamable HTTP transport for the Lambda Function URL. Each tool module imports boto3 clients and the shared DB connection helper at module level (cached across warm invocations).
 
+> **Spec erratum (2026-03-29) — build order and validation:** `tools/__init__.py` does `from . import agents, assets, data, observation, pipeline, site`, which means importing *any* tool module via the package path (e.g., `import lambdas.mcp.tools.pipeline`) triggers `__init__.py` and cascade-imports *all* siblings. During the first ralph wiggum run, `__init__.py` was created (p4-mcp-init) *before* the 6 tool modules it imports. Every subsequent tool module validation used `python3 -c 'import lambdas.mcp.tools.<module>'`, which triggered the init, which tried to import siblings that didn't exist yet — causing all 6 tasks to fail validation and block.
+>
+> **Fix for automated builds:** (1) `__init__.py` must be the *last* MCP tools task, depending on all 6 tool modules. (2) Validation commands for individual tool modules should avoid triggering `__init__.py` — use file-level syntax checks (`python3 -c 'import ast; ast.parse(open("lambdas/mcp/tools/pipeline.py").read())'`) or direct-file imports (`cd lambdas/mcp && PYTHONPATH=../shared/python python3 -c 'from tools import pipeline'`) instead of package-level imports.
+
 ### Handler Entry Point
 
 `handler.py` exports two key functions:
@@ -1023,6 +1027,24 @@ resource "aws_lambda_function" "mcp" {
       SITE_DOMAIN                = var.domain_name
     }
   }
+```
+
+> **Spec erratum (2026-03-29):** The first ralph wiggum run produced `pipeline.py` with env var `STATEMACHINE_ARN` instead of `STATE_MACHINE_ARN`. The env var names were specified only inside the Terraform HCL block above — there was no standalone reference table, so the code-generation agent used a plausible but wrong name. Adding the table below.
+
+#### MCP Lambda Environment Variables
+
+These are the canonical names. All tool modules must use these exactly.
+
+| Variable | Terraform Source | Read By | Purpose |
+|----------|-----------------|---------|---------|
+| `STATE_MACHINE_ARN` | `aws_sfn_state_machine.pipeline.arn` | `pipeline.py`, `observation.py`, `resources.py` | Step Functions state machine ARN |
+| `S3_BUCKET` | `aws_s3_bucket.episodes.id` | `assets.py` | Episode assets S3 bucket |
+| `CLOUDFRONT_DISTRIBUTION_ID` | `aws_cloudfront_distribution.site.id` | `site.py` | CloudFront distribution for cache invalidation |
+| `ACM_CERTIFICATE_ARN` | `aws_acm_certificate.site.arn` | `site.py` | ACM certificate for SSL status checks |
+| `SITE_DOMAIN` | `var.domain_name` | `site.py` | Podcast site domain |
+| `DB_CONNECTION_STRING` | `var.db_connection_string` | `data.py`, `observation.py`, `assets.py`, `site.py`, `resources.py` | Postgres connection string |
+
+```hcl
 
   depends_on = [
     aws_iam_role_policy.mcp,
