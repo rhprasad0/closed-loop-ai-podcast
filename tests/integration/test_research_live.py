@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.integration.twins.fixtures import GITHUB_REPOS, GITHUB_USERS
+from tests.integration.twins.fixtures import GITHUB_REPOS
 
 
 @pytest.mark.integration

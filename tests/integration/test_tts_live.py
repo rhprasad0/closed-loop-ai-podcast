@@ -16,7 +16,6 @@ from unittest.mock import MagicMock
 import boto3
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Local fixture: state tracker for ElevenLabs calls within this test
 # ---------------------------------------------------------------------------

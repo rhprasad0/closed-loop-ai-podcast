@@ -6,7 +6,6 @@ Pre-uploads a 1-second silent MP3 and 1x1 PNG to S3 before invoking the handler.
 
 from __future__ import annotations
 
-import io
 import struct
 import subprocess
 import zlib
@@ -15,7 +14,6 @@ from unittest.mock import MagicMock
 
 import boto3
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers to generate minimal valid test media files

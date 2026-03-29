@@ -7,7 +7,6 @@ PostProduction and TTS are skipped (TTS twin returns fake audio; ffmpeg would fa
 from __future__ import annotations
 
 import base64
-import io
 import json
 import struct
 import zlib
@@ -15,7 +14,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # PNG helper — reused from test_cover_art_live pattern

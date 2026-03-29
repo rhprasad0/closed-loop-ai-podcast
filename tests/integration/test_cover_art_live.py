@@ -44,7 +44,6 @@ def _make_minimal_png() -> bytes:
 def _make_nova_canvas_response(image_bytes: bytes) -> MagicMock:
     """Return a mock Bedrock invoke_model response shaped like Nova Canvas output."""
     import json
-    import io
 
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     body_json = json.dumps({"images": [encoded]})

@@ -18,8 +18,8 @@ import boto3
 import pytest
 from pytest_httpserver import HTTPServer
 
-from tests.integration.twins.exa_twin import setup_exa_twin
 from tests.integration.twins.elevenlabs_twin import setup_elevenlabs_twin
+from tests.integration.twins.exa_twin import setup_exa_twin
 from tests.integration.twins.fixtures import FEATURED_DEVELOPERS
 from tests.integration.twins.github_twin import setup_github_twin
 
@@ -279,7 +279,8 @@ def seed_featured_developers(cleanup_test_data: None) -> Generator[None, None, N
     each developer from fixtures.FEATURED_DEVELOPERS. Cleans up both in teardown.
     Depends on cleanup_test_data to ensure prior-test rows are removed first.
     """
-    from shared.db import execute, query as db_query
+    from shared.db import execute
+    from shared.db import query as db_query
 
     seed_execution_id = f"integration-test-seed-{uuid4().hex[:12]}"
 
