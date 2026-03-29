@@ -15,7 +15,7 @@ import boto3
 
 _sfn = boto3.client("stepfunctions")
 
-STATEMACHINE_ARN: str = os.environ.get("STATEMACHINE_ARN", "")
+STATE_MACHINE_ARN: str = os.environ.get("STATE_MACHINE_ARN", "")
 
 _VALID_STEPS = {
     "Discovery",
@@ -48,7 +48,7 @@ async def start_pipeline() -> dict[str, Any]:
     """
     name = f"mcp-{_now_tag()}"
     resp = _sfn.start_execution(
-        stateMachineArn=STATEMACHINE_ARN,
+        stateMachineArn=STATE_MACHINE_ARN,
         name=name,
     )
     return {
@@ -122,7 +122,7 @@ async def get_execution_status(execution_arn: str) -> dict[str, Any]:
         "start_date": _fmt_dt(desc.get("startDate")),
         "stop_date": _fmt_dt(desc.get("stopDate")),
         "state_object": state_object,
-        "error": desc.get("cause") and desc.get("error") or desc.get("error"),
+        "error": desc.get("error"),
         "cause": desc.get("cause"),
     }
 
@@ -141,7 +141,7 @@ async def list_executions(
     max_results = min(max(1, max_results), 50)
 
     kwargs: dict[str, Any] = {
-        "stateMachineArn": STATEMACHINE_ARN,
+        "stateMachineArn": STATE_MACHINE_ARN,
         "maxResults": max_results,
     }
     if status_filter:
@@ -200,7 +200,7 @@ async def retry_from_step(
 
     name = f"mcp-retry-{_now_tag()}"
     resp = _sfn.start_execution(
-        stateMachineArn=STATEMACHINE_ARN,
+        stateMachineArn=STATE_MACHINE_ARN,
         name=name,
         input=json.dumps(state),
     )
