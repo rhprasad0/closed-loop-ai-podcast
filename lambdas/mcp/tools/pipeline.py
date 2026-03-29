@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -30,7 +30,7 @@ _VALID_STEPS = {
 
 def _now_tag() -> str:
     """Return a timestamp string safe for Step Functions execution names."""
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _fmt_dt(dt: datetime | None) -> str | None:

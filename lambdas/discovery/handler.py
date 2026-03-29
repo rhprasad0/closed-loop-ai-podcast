@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import urllib.error
 import urllib.request
 from typing import Any
@@ -184,7 +183,7 @@ def _execute_get_github_repo(tool_input: dict[str, Any]) -> dict[str, Any]:
             "html_url": data["html_url"],
             "default_branch": data["default_branch"],
         }
-    except (urllib.error.HTTPError, socket.timeout) as exc:
+    except (TimeoutError, urllib.error.HTTPError) as exc:
         return {"error": str(exc)}
 
 

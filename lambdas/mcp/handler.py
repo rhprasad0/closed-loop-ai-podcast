@@ -4,20 +4,19 @@ import asyncio
 import base64
 from typing import Any
 
+import resources as resources_module
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from mcp.server.fastmcp import FastMCP
-
-from shared.logging import get_logger
-from shared.metrics import get_metrics
-from shared.tracing import get_tracer
-
-import resources as resources_module
 from tools import agents as agents_tools
 from tools import assets as assets_tools
 from tools import data as data_tools
 from tools import observation as observation_tools
 from tools import pipeline as pipeline_tools
 from tools import site as site_tools
+
+from shared.logging import get_logger
+from shared.metrics import get_metrics
+from shared.tracing import get_tracer
 
 logger = get_logger("mcp")
 tracer = get_tracer("mcp")

@@ -73,7 +73,7 @@ def _extract_text(content: list[dict[str, Any]]) -> str:
     With adaptive thinking enabled, the content may include thinking blocks
     before the text block. We take the last text block as the model's response.
     """
-    return next(b["text"] for b in reversed(content) if b["type"] == "text")
+    return str(next(b["text"] for b in reversed(content) if b["type"] == "text"))
 
 
 def invoke_model(

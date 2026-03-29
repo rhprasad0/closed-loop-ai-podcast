@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,7 +18,6 @@ from botocore.exceptions import ClientError
 
 from lambdas.cover_art.handler import (
     DEFAULT_COLOR_MOOD,
-    LANGUAGE_COLOR_MOODS,
     PNG_MAGIC_BYTES,
     _build_cover_art_prompt,
     _generate_image,

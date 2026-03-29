@@ -10,7 +10,7 @@ boto3 (InvocationType=RequestResponse) and returns the parsed response payload.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -22,7 +22,7 @@ LAMBDA_CLIENT: BaseClient = boto3.client("lambda")
 
 def _now_tag() -> str:
     """Return a compact UTC timestamp for synthetic execution IDs."""
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _invoke(function_name: str, payload: dict[str, Any]) -> dict[str, Any]:

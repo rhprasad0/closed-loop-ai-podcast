@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import boto3
 
-
 # Module-level cached S3 client — reused across Lambda warm starts.
 _s3_client = boto3.client("s3")
 

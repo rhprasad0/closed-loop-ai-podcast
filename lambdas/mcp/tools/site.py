@@ -6,7 +6,7 @@ Tools: invalidate_cache, get_site_status.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -23,7 +23,7 @@ SITE_DOMAIN: str = os.environ.get("SITE_DOMAIN", "")
 
 def _now_ref() -> str:
     """Return a unique caller reference string based on current timestamp."""
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 async def invalidate_cache(paths: list[str] | None = None) -> dict[str, Any]:
@@ -78,7 +78,8 @@ async def get_site_status() -> dict[str, Any]:
                 episode_count = int(count_row[0])
 
             cur.execute(
-                "SELECT episode_id, repo_name, air_date FROM episodes ORDER BY air_date DESC LIMIT 1"
+                "SELECT episode_id, repo_name, air_date "
+                "FROM episodes ORDER BY air_date DESC LIMIT 1"
             )
             ep_row = cur.fetchone()
             if ep_row:

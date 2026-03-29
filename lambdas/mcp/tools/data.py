@@ -62,7 +62,7 @@ async def query_episodes(
     params: list[Any] = []
 
     if episode_id is not None:
-        conditions.append(f"episode_id = %s")
+        conditions.append("episode_id = %s")
         params.append(episode_id)
     if developer_github is not None:
         conditions.append("developer_github = %s")

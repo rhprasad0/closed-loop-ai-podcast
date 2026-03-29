@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import socket
 import urllib.error
 import urllib.request
 from typing import Any
@@ -131,7 +130,7 @@ def _execute_get_github_user(tool_input: dict[str, Any]) -> dict[str, Any]:
             "created_at": data["created_at"],
             "html_url": data["html_url"],
         }
-    except (urllib.error.HTTPError, socket.timeout) as exc:
+    except (TimeoutError, urllib.error.HTTPError) as exc:
         return {"error": str(exc)}
 
 
@@ -165,7 +164,7 @@ def _execute_get_user_repos(tool_input: dict[str, Any]) -> list[dict[str, Any]] 
             }
             for repo in data
         ]
-    except (urllib.error.HTTPError, socket.timeout) as exc:
+    except (TimeoutError, urllib.error.HTTPError) as exc:
         return {"error": str(exc)}
 
 
@@ -199,7 +198,7 @@ def _execute_get_repo_details(tool_input: dict[str, Any]) -> dict[str, Any]:
             "updated_at": data["updated_at"],
             "html_url": data["html_url"],
         }
-    except (urllib.error.HTTPError, socket.timeout) as exc:
+    except (TimeoutError, urllib.error.HTTPError) as exc:
         return {"error": str(exc)}
 
 
@@ -223,7 +222,7 @@ def _execute_get_repo_readme(tool_input: dict[str, Any]) -> dict[str, Any]:
             data: dict[str, Any] = json.loads(resp.read())
         decoded = base64.b64decode(data["content"]).decode()
         return {"content": decoded}
-    except (urllib.error.HTTPError, socket.timeout) as exc:
+    except (TimeoutError, urllib.error.HTTPError) as exc:
         return {"error": str(exc)}
 
 
@@ -263,7 +262,7 @@ def _execute_search_repositories(tool_input: dict[str, Any]) -> dict[str, Any]:
                 for item in data["items"]
             ],
         }
-    except (urllib.error.HTTPError, socket.timeout) as exc:
+    except (TimeoutError, urllib.error.HTTPError) as exc:
         return {"error": str(exc)}
 
 

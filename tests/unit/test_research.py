@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import socket
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 
@@ -170,7 +169,7 @@ def test_get_github_user_http_error(mock_research_urlopen: MagicMock) -> None:
 def test_get_github_user_timeout(mock_research_urlopen: MagicMock) -> None:
     from lambdas.research.handler import _execute_get_github_user
 
-    mock_research_urlopen.side_effect = socket.timeout("timed out")
+    mock_research_urlopen.side_effect = TimeoutError("timed out")
     result = _execute_get_github_user({"username": "x"})
     assert "error" in result
 

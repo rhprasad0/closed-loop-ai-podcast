@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 STATE_MACHINE_ARN = "arn:aws:states:us-east-1:123456789:stateMachine:zerostars-pipeline"
 EXECUTION_ARN = (
     "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:mcp-20250713T090000Z"

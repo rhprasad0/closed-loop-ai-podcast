@@ -6,7 +6,7 @@ Tools: get_episode_assets, list_s3_assets, get_presigned_url.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -30,7 +30,8 @@ async def get_episode_assets(episode_id: int) -> dict[str, Any]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT s3_cover_art_path, s3_mp3_path, s3_mp4_path FROM episodes WHERE episode_id = %s",
+                "SELECT s3_cover_art_path, s3_mp3_path, s3_mp4_path "
+                "FROM episodes WHERE episode_id = %s",
                 (episode_id,),
             )
             result = cur.fetchone()
@@ -95,7 +96,7 @@ async def get_presigned_url(s3_key: str, expires_in: int = 3600) -> dict[str, An
     # Cap expiry to 12 hours per spec
     expires_in = min(expires_in, 43200)
     url = generate_presigned_url(S3_BUCKET, s3_key, expiry=expires_in)
-    expires_at = (datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)).strftime(
+    expires_at = (datetime.now(tz=UTC) + timedelta(seconds=expires_in)).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
     return {"url": url, "expires_at": expires_at}

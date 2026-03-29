@@ -9,7 +9,7 @@ data in a convenient form for interactive inspection.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -78,7 +78,7 @@ async def get_agent_logs(
     log_group = _agent_log_group(agent)
 
     start_time_ms = int(
-        (datetime.now(tz=timezone.utc) - timedelta(minutes=since_minutes)).timestamp() * 1000
+        (datetime.now(tz=UTC) - timedelta(minutes=since_minutes)).timestamp() * 1000
     )
 
     kwargs: dict[str, Any] = {
@@ -112,7 +112,7 @@ async def get_agent_logs(
             continue
 
         ts_ms: int = event.get("timestamp", 0)
-        ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
         timestamp_str = ts_dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{ts_dt.microsecond // 1000:03d}Z"
 
         logs.append(
@@ -252,7 +252,7 @@ async def get_pipeline_health(days: int = 30) -> dict[str, Any]:
     Args:
         days: Look-back period in days. Default 30.
     """
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    cutoff = datetime.now(tz=UTC) - timedelta(days=days)
 
     statuses = ["RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT"]
     all_executions: list[dict[str, Any]] = []
@@ -270,7 +270,7 @@ async def get_pipeline_health(days: int = 30) -> dict[str, Any]:
             for ex in batch:
                 start: datetime | None = ex.get("startDate")
                 if start is not None and start.tzinfo is None:
-                    start = start.replace(tzinfo=timezone.utc)
+                    start = start.replace(tzinfo=UTC)
                 if start is None or start < cutoff:
                     break
                 all_executions.append(ex)
@@ -301,9 +301,9 @@ async def get_pipeline_health(days: int = 30) -> dict[str, Any]:
         stop_dt: datetime | None = ex.get("stopDate")
         if start_dt and stop_dt:
             if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
+                start_dt = start_dt.replace(tzinfo=UTC)
             if stop_dt.tzinfo is None:
-                stop_dt = stop_dt.replace(tzinfo=timezone.utc)
+                stop_dt = stop_dt.replace(tzinfo=UTC)
             total_duration_ms += int((stop_dt - start_dt).total_seconds() * 1000)
             duration_count += 1
 
