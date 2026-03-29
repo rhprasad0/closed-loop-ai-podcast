@@ -408,7 +408,7 @@ run_convergence_lint() {
 
         # Count errors
         local ruff_count mypy_count
-        ruff_count=$(echo "$lint_errors" | grep -cE "^[a-zA-Z]" || true)
+        ruff_count=$(echo "$lint_errors" | grep -vE "^All checks passed" | grep -cE "^[a-zA-Z]" || true)
         mypy_count=$(echo "$mypy_errors" | grep -cE "^[a-zA-Z].*: error:" || true)
 
         log "CONV-LINT $lint_iter | ruff errors: $ruff_count, mypy errors: $mypy_count"
@@ -551,10 +551,11 @@ run_convergence_pytest() {
 
         log "CONV-TEST $conv_iter | Targeting: $worst_test"
 
-        # Map test file to source file
+        # Map test file to source file(s)
         local source_file=""
         local basename_noext
         basename_noext=$(basename "$worst_test" .py | sed 's/^test_//')
+        local integration_extra_sources=()
 
         if [[ "$worst_test" == *"test_shared/"* ]]; then
             source_file="lambdas/shared/python/shared/${basename_noext}.py"
@@ -564,10 +565,42 @@ run_convergence_pytest() {
                 resources) source_file="lambdas/mcp/resources.py" ;;
                 *)         source_file="lambdas/mcp/tools/${basename_noext}.py" ;;
             esac
+        elif [[ "$CAMPAIGN" == "integration" && "$worst_test" == *"integration/"* ]]; then
+            # --- Integration campaign: smart source mapping ---
+            if [[ "$worst_test" == *"integration/twins/"* ]]; then
+                source_file="tests/integration/twins/${basename_noext}.py"
+            elif [[ "$worst_test" == *"integration/conftest.py" ]]; then
+                source_file="tests/integration/conftest.py"
+            elif [[ "$basename_noext" == "chain_discovery_to_script" ]]; then
+                source_file="lambdas/discovery/handler.py"
+                integration_extra_sources+=(
+                    "lambdas/research/handler.py"
+                    "lambdas/script/handler.py"
+                )
+            elif [[ "$basename_noext" == "chain_full_pipeline" ]]; then
+                source_file="lambdas/discovery/handler.py"
+                integration_extra_sources+=(
+                    "lambdas/research/handler.py"
+                    "lambdas/script/handler.py"
+                    "lambdas/producer/handler.py"
+                    "lambdas/cover_art/handler.py"
+                )
+            else
+                # Single-handler live test: test_discovery_live -> discovery
+                local handler_name="${basename_noext//_live/}"
+                source_file="lambdas/${handler_name}/handler.py"
+            fi
+            # Always include test infrastructure as extra context
+            integration_extra_sources+=(
+                "tests/integration/conftest.py"
+                "tests/integration/twins/fixtures.py"
+                "tests/integration/twins/github_twin.py"
+                "tests/integration/twins/exa_twin.py"
+                "tests/integration/twins/elevenlabs_twin.py"
+            )
         elif [[ "$worst_test" == *"integration/twins/"* ]]; then
             source_file="tests/integration/twins/${basename_noext}.py"
         elif [[ "$worst_test" == *"integration/"* ]]; then
-            # Integration tests — source is the handler or twin
             source_file="lambdas/${basename_noext//_live/}/handler.py"
         else
             source_file="lambdas/${basename_noext}/handler.py"
@@ -586,6 +619,21 @@ $(cat "$PROJECT_ROOT/$source_file")
 "
         fi
 
+        # Include additional source files for integration campaigns
+        local extra_content=""
+        if [[ ${#integration_extra_sources[@]} -gt 0 ]]; then
+            for extra_src in "${integration_extra_sources[@]}"; do
+                [[ "$extra_src" == "$source_file" ]] && continue
+                if [[ -f "$PROJECT_ROOT/$extra_src" ]]; then
+                    extra_content+="
+=== CONTEXT: $extra_src ===
+$(cat "$PROJECT_ROOT/$extra_src")
+=== END CONTEXT ===
+"
+                fi
+            done
+        fi
+
         local test_content=""
         if [[ -f "$PROJECT_ROOT/$worst_test" ]]; then
             test_content="
@@ -593,6 +641,28 @@ $(cat "$PROJECT_ROOT/$source_file")
 $(cat "$PROJECT_ROOT/$worst_test")
 === END TEST ===
 "
+        fi
+
+        # Select rules based on campaign type
+        local fix_rules
+        if [[ "$CAMPAIGN" == "integration" ]]; then
+            fix_rules="## Rules
+1. Fix the SOURCE code OR test infrastructure to make tests pass. Do NOT modify test_*.py files.
+2. Files you MAY modify: lambdas/**/*.py, tests/integration/conftest.py, tests/integration/twins/*.py
+3. Files you MUST NOT modify: tests/integration/test_*.py (these are the spec)
+4. The test infrastructure (conftest.py, twins/, fixtures.py) is implementation — it may have bugs.
+5. If the error is in a twin server (wrong response shape, missing endpoint, bad routing), fix the twin.
+6. If the error is in conftest.py (fixture wiring, URL redirect, monkeypatch), fix conftest.py.
+7. If the error is in handler source code (wrong return shape, missing field), fix the handler.
+8. Read any spec files you need for context (docs/spec/type-checking.md, docs/spec/interface-contracts.md, docs/spec/external-api-contracts.md).
+9. After fixing, run: cd $PROJECT_ROOT && $CONVERGENCE_TEST_CMD"
+        else
+            fix_rules="## Rules
+1. Fix the SOURCE code to make the tests pass. The tests are the spec — do NOT modify test files.
+2. If a test imports a function that doesn't exist, create it in the source file with the expected signature.
+3. If a test asserts a specific return value, ensure the source returns exactly that.
+4. Read any spec files you need for context (docs/spec/type-checking.md, docs/spec/interface-contracts.md).
+5. After fixing, run: cd $PROJECT_ROOT && $CONVERGENCE_TEST_CMD"
         fi
 
         cat > "$fix_prompt" <<FIXPROMPT
@@ -604,14 +674,10 @@ $(cat "$test_output")
 
 ## Focus File: $worst_test ($total_fail total failures across all files)
 
-## Rules
-1. Fix the SOURCE code to make the tests pass. The tests are the spec — do NOT modify test files.
-2. If a test imports a function that doesn't exist, create it in the source file with the expected signature.
-3. If a test asserts a specific return value, ensure the source returns exactly that.
-4. Read any spec files you need for context (docs/spec/type-checking.md, docs/spec/interface-contracts.md).
-5. After fixing, run: cd $PROJECT_ROOT && $CONVERGENCE_TEST_CMD
+$fix_rules
 
 $source_content
+$extra_content
 $test_content
 FIXPROMPT
 
