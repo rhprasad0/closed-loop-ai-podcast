@@ -50,7 +50,7 @@ def test_query_episodes_applies_filters():
     with patch("lambdas.mcp.tools.data.db.query") as mock_query:
         mock_query.side_effect = [
             [(0,)],  # COUNT query
-            [],      # SELECT query
+            [],  # SELECT query
         ]
 
         from lambdas.mcp.tools.data import query_episodes
@@ -81,7 +81,22 @@ def test_query_episodes_filters_by_episode_id():
     with patch("lambdas.mcp.tools.data.db.query") as mock_query:
         mock_query.side_effect = [
             [(1,)],  # COUNT
-            [(1, date(2025, 7, 6), "url", "repo", "user", "Name", 5, 1, None, None, None, datetime(2025, 7, 6))],
+            [
+                (
+                    1,
+                    date(2025, 7, 6),
+                    "url",
+                    "repo",
+                    "user",
+                    "Name",
+                    5,
+                    1,
+                    None,
+                    None,
+                    None,
+                    datetime(2025, 7, 6),
+                )
+            ],
         ]
 
         from lambdas.mcp.tools.data import query_episodes
@@ -152,7 +167,7 @@ def test_query_episodes_returns_total_count():
     with patch("lambdas.mcp.tools.data.db.query") as mock_query:
         mock_query.side_effect = [
             [(42,)],  # COUNT
-            [],        # SELECT (no rows)
+            [],  # SELECT (no rows)
         ]
 
         from lambdas.mcp.tools.data import query_episodes
@@ -567,6 +582,6 @@ def test_upsert_metrics_passes_all_params():
     assert params[0] == 7  # episode_id
     assert params[1] == "https://linkedin.com/post/7"  # linkedin_post_url
     assert params[2] == 500  # views
-    assert params[3] == 50   # likes
-    assert params[4] == 15   # comments
-    assert params[5] == 8    # shares
+    assert params[3] == 50  # likes
+    assert params[4] == 15  # comments
+    assert params[5] == 8  # shares

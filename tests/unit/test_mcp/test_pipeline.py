@@ -78,8 +78,7 @@ def test_start_pipeline_name_format():
     name = mock_sfn.start_execution.call_args.kwargs["name"]
     assert len(name) <= 80
     assert all(
-        c in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_T"
-        for c in name
+        c in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_T" for c in name
     )
 
 
@@ -95,9 +94,7 @@ def test_stop_pipeline_passes_cause():
     with patch("lambdas.mcp.tools.pipeline._sfn", mock_sfn):
         from lambdas.mcp.tools.pipeline import stop_pipeline
 
-        result = asyncio.run(
-            stop_pipeline(execution_arn=EXECUTION_ARN, cause="Bad repo pick")
-        )
+        result = asyncio.run(stop_pipeline(execution_arn=EXECUTION_ARN, cause="Bad repo pick"))
 
     mock_sfn.stop_execution.assert_called_once_with(
         executionArn=EXECUTION_ARN,

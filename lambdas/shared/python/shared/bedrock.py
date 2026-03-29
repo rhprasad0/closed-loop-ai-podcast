@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable
 from typing import Any, Literal
@@ -13,7 +14,7 @@ import botocore.exceptions
 ToolDefinition = dict[str, Any]
 ToolExecutor = Callable[[str, dict[str, Any]], str]
 
-DEFAULT_MODEL_ID: str = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL_ID: str = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
 MAX_TOKENS: int = 16384  # room for adaptive thinking at medium/high effort
 
 # Effort levels for Sonnet 4.6. "high" for agentic multi-turn (Discovery,
@@ -21,6 +22,7 @@ MAX_TOKENS: int = 16384  # room for adaptive thinking at medium/high effort
 Effort = Literal["low", "medium", "high", "max"]
 DEFAULT_EFFORT_AGENTIC: Effort = "high"
 DEFAULT_EFFORT_SINGLE_TURN: Effort = "medium"
+
 
 def _get_bedrock_client() -> Any:
     """Return a boto3 bedrock-runtime client."""

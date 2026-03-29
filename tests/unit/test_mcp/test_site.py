@@ -39,9 +39,7 @@ def test_invalidate_cache_custom_paths(mock_site_boto3_clients):
 
         result = asyncio.run(invalidate_cache(paths=["/", "/episodes/1"]))
 
-    paths = cf_client.create_invalidation.call_args.kwargs[
-        "InvalidationBatch"
-    ]["Paths"]["Items"]
+    paths = cf_client.create_invalidation.call_args.kwargs["InvalidationBatch"]["Paths"]["Items"]
     assert paths == ["/", "/episodes/1"]
     assert result["invalidation_id"] == "I456"
 
@@ -91,7 +89,10 @@ def test_get_site_status_aggregates_sources(mock_site_boto3_clients, mock_mcp_db
     ):
         from lambdas.mcp.tools.site import get_site_status
 
-        cursor.fetchone.side_effect = [(11,), (11, "cool-project", MagicMock(isoformat=MagicMock(return_value="2025-07-06")))]
+        cursor.fetchone.side_effect = [
+            (11,),
+            (11, "cool-project", MagicMock(isoformat=MagicMock(return_value="2025-07-06"))),
+        ]
 
         cf_client.get_distribution.return_value = {
             "Distribution": {"Id": "E123", "Status": "Deployed"},

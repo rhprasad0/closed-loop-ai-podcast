@@ -148,9 +148,7 @@ def _parse_script_output(text: str) -> ScriptOutput:
     # Overwrite character_count with actual length — LLMs frequently miscount
     actual_count = len(script_text)
     if actual_count >= MAX_SCRIPT_CHARACTERS:
-        raise ValueError(
-            f"character_count {actual_count} >= hard limit {MAX_SCRIPT_CHARACTERS}"
-        )
+        raise ValueError(f"character_count {actual_count} >= hard limit {MAX_SCRIPT_CHARACTERS}")
 
     # Validate segments (exact match, order matters)
     segments: list[str] = list(data["segments"])

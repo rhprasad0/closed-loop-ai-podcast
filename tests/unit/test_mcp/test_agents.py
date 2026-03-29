@@ -56,9 +56,7 @@ def test_invoke_discovery_builds_synthetic_state():
 
 def test_invoke_research_places_params_in_discovery_key():
     mock_client = MagicMock()
-    mock_client.invoke.return_value = _lambda_response(
-        {"developer_name": "Test User"}
-    )
+    mock_client.invoke.return_value = _lambda_response({"developer_name": "Test User"})
 
     with patch("lambdas.mcp.tools.agents.LAMBDA_CLIENT", mock_client):
         from lambdas.mcp.tools.agents import invoke_research
@@ -142,9 +140,7 @@ def test_invoke_producer_places_script_text(
     sample_research_output,
 ):
     mock_client = MagicMock()
-    mock_client.invoke.return_value = _lambda_response(
-        {"verdict": "PASS", "score": 8}
-    )
+    mock_client.invoke.return_value = _lambda_response({"verdict": "PASS", "score": 8})
 
     with patch("lambdas.mcp.tools.agents.LAMBDA_CLIENT", mock_client):
         from lambdas.mcp.tools.agents import invoke_producer
@@ -168,9 +164,7 @@ def test_invoke_producer_places_script_text(
 
 def test_invoke_cover_art_auto_generates_execution_id():
     mock_client = MagicMock()
-    mock_client.invoke.return_value = _lambda_response(
-        {"s3_key": "episodes/test/cover.png"}
-    )
+    mock_client.invoke.return_value = _lambda_response({"s3_key": "episodes/test/cover.png"})
 
     with patch("lambdas.mcp.tools.agents.LAMBDA_CLIENT", mock_client):
         from lambdas.mcp.tools.agents import invoke_cover_art
@@ -188,9 +182,7 @@ def test_invoke_cover_art_auto_generates_execution_id():
 
 def test_invoke_cover_art_uses_provided_execution_id():
     mock_client = MagicMock()
-    mock_client.invoke.return_value = _lambda_response(
-        {"s3_key": "episodes/custom-id/cover.png"}
-    )
+    mock_client.invoke.return_value = _lambda_response({"s3_key": "episodes/custom-id/cover.png"})
 
     with patch("lambdas.mcp.tools.agents.LAMBDA_CLIENT", mock_client):
         from lambdas.mcp.tools.agents import invoke_cover_art

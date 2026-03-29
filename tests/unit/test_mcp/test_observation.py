@@ -227,9 +227,7 @@ def test_get_execution_history_passes_include_flag():
     with patch("lambdas.mcp.tools.observation._sfn", mock_sfn):
         from lambdas.mcp.tools.observation import get_execution_history
 
-        asyncio.run(
-            get_execution_history(execution_arn=EXECUTION_ARN, include_input_output=False)
-        )
+        asyncio.run(get_execution_history(execution_arn=EXECUTION_ARN, include_input_output=False))
 
     call_kwargs = mock_sfn.get_execution_history.call_args.kwargs
     assert call_kwargs["includeExecutionData"] is False
@@ -384,11 +382,11 @@ def test_get_pipeline_health_calculates_success_rate():
 
     # list_executions is called once per status: RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT
     mock_sfn.list_executions.side_effect = [
-        {"executions": []},                                        # RUNNING
-        {"executions": make_executions("SUCCEEDED", 8)},           # SUCCEEDED
-        {"executions": make_executions("FAILED", 2)},              # FAILED
-        {"executions": []},                                        # ABORTED
-        {"executions": []},                                        # TIMED_OUT
+        {"executions": []},  # RUNNING
+        {"executions": make_executions("SUCCEEDED", 8)},  # SUCCEEDED
+        {"executions": make_executions("FAILED", 2)},  # FAILED
+        {"executions": []},  # ABORTED
+        {"executions": []},  # TIMED_OUT
     ]
     mock_sfn.describe_execution.return_value = {
         "executionArn": "arn:exec:FAILED:0",
@@ -424,11 +422,11 @@ def test_get_pipeline_health_includes_running_executions():
     }
 
     mock_sfn.list_executions.side_effect = [
-        {"executions": [running_exec]},   # RUNNING
-        {"executions": []},               # SUCCEEDED
-        {"executions": []},               # FAILED
-        {"executions": []},               # ABORTED
-        {"executions": []},               # TIMED_OUT
+        {"executions": [running_exec]},  # RUNNING
+        {"executions": []},  # SUCCEEDED
+        {"executions": []},  # FAILED
+        {"executions": []},  # ABORTED
+        {"executions": []},  # TIMED_OUT
     ]
 
     with (
@@ -458,11 +456,11 @@ def test_get_pipeline_health_includes_recent_failures():
     }
 
     mock_sfn.list_executions.side_effect = [
-        {"executions": []},                # RUNNING
-        {"executions": []},                # SUCCEEDED
-        {"executions": [failed_exec]},     # FAILED
-        {"executions": []},                # ABORTED
-        {"executions": []},                # TIMED_OUT
+        {"executions": []},  # RUNNING
+        {"executions": []},  # SUCCEEDED
+        {"executions": [failed_exec]},  # FAILED
+        {"executions": []},  # ABORTED
+        {"executions": []},  # TIMED_OUT
     ]
     mock_sfn.describe_execution.return_value = {
         "executionArn": "arn:exec:FAILED:0",

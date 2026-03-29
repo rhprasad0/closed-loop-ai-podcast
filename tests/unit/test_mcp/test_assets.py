@@ -99,7 +99,9 @@ def test_list_s3_assets_passes_prefix(mock_s3_client):
             {
                 "Key": "episodes/test/cover.png",
                 "Size": 1024,
-                "LastModified": MagicMock(strftime=MagicMock(return_value="2025-07-13T09:00:00.000Z")),
+                "LastModified": MagicMock(
+                    strftime=MagicMock(return_value="2025-07-13T09:00:00.000Z")
+                ),
             },
         ],
     }
