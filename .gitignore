@@ -10,9 +10,9 @@ __pycache__/
 terraform.tfstate*
 .terraform.lock.hcl
 
-ralph.log
-ralph-status.txt
-ralph.pid
+ralph-*.log
+ralph-*.pid
+ralph-*-status.txt
 iterations/
 
 layers/ffmpeg/ffmpeg-layer.zip

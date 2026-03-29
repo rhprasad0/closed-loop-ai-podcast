@@ -71,6 +71,9 @@ RUN pip install --no-cache-dir \
         mypy \
         pytest \
         pytest-cov \
+        pytest-httpserver \
+        pytest-rerunfailures \
+        pytest-timeout \
         moto
 
 # uv (provides uvx, used by Claude Code MCP servers)

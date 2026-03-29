@@ -4,34 +4,62 @@ set -euo pipefail
 # ralph.sh — Ralph Wiggum build loop for "0 Stars, 10/10"
 #
 # Usage:
-#   ./ralph.sh              Run build loop (foreground)
-#   nohup ./ralph.sh &      Run detached
-#   ./ralph.sh status       Print current status
-#   ./ralph.sh reset        Reset all tasks to pending
+#   ./ralph.sh                                Run default campaign (tasks.json)
+#   ./ralph.sh --tasks tasks-integration.json Run integration campaign
+#   nohup ./ralph.sh &                        Run detached
+#   ./ralph.sh [--tasks FILE] status          Print current status
+#   ./ralph.sh [--tasks FILE] reset           Reset all tasks to pending
 
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
-TASKS_FILE="$PROJECT_ROOT/tasks.json"
-LOG_FILE="$PROJECT_ROOT/ralph.log"
-STATUS_FILE="$PROJECT_ROOT/ralph-status.txt"
-PID_FILE="$PROJECT_ROOT/ralph.pid"
-ITER_DIR="$PROJECT_ROOT/iterations"
-SPEC_DIR="$PROJECT_ROOT/docs/spec"
 MODEL="sonnet"
 MAX_TASK_RETRIES=3
 MAX_CONVERGENCE=30
 STALL_THRESHOLD=3
 SPEC_INLINE_MAX=51200  # 50KB — inline specs under this size
 
+# ── Parse --tasks flag ─────────────────────────────────────────
+TASKS_FILE="$PROJECT_ROOT/tasks.json"
+SUBCOMMAND=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --tasks)
+            TASKS_FILE="$PROJECT_ROOT/$2"
+            shift 2
+            ;;
+        status|reset)
+            SUBCOMMAND="$1"
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# ── Derive campaign name and paths from tasks file ─────────────
+CAMPAIGN=$(jq -r '.campaign // "default"' "$TASKS_FILE" 2>/dev/null || echo "default")
+LOG_FILE="$PROJECT_ROOT/ralph-${CAMPAIGN}.log"
+STATUS_FILE="$PROJECT_ROOT/ralph-${CAMPAIGN}-status.txt"
+PID_FILE="$PROJECT_ROOT/ralph-${CAMPAIGN}.pid"
+ITER_DIR="$PROJECT_ROOT/iterations/${CAMPAIGN}"
+SPEC_DIR="$PROJECT_ROOT/docs/spec"
+
+# Read convergence config from tasks file (with defaults)
+CONVERGENCE_TEST_CMD=$(jq -r '.convergence.test_cmd // "PYTHONPATH=lambdas/shared/python pytest tests/unit/ -v --tb=short"' "$TASKS_FILE" 2>/dev/null)
+CONVERGENCE_LINT_PATHS=$(jq -r '(.convergence.lint_paths // ["lambdas/", "tests/"]) | join(" ")' "$TASKS_FILE" 2>/dev/null)
+CONVERGENCE_MYPY_PATHS=$(jq -r '(.convergence.mypy_paths // []) | join(" ")' "$TASKS_FILE" 2>/dev/null)
+
 # ── Subcommands ─────────────────────────────────────────────────
-if [[ "${1:-}" == "status" ]]; then
-    [[ -f "$STATUS_FILE" ]] && cat "$STATUS_FILE" || echo "Ralph has not started yet."
+if [[ "$SUBCOMMAND" == "status" ]]; then
+    [[ -f "$STATUS_FILE" ]] && cat "$STATUS_FILE" || echo "Ralph has not started campaign '$CAMPAIGN' yet."
     exit 0
 fi
 
-if [[ "${1:-}" == "reset" ]]; then
-    jq '[.[] | .status = "pending" | .attempts = 0]' "$TASKS_FILE" > tmp.$$.json
+if [[ "$SUBCOMMAND" == "reset" ]]; then
+    jq '.tasks = [.tasks[] | .status = "pending" | .attempts = 0]' "$TASKS_FILE" > tmp.$$.json
     mv tmp.$$.json "$TASKS_FILE"
-    echo "All tasks reset to pending."
+    echo "All tasks in campaign '$CAMPAIGN' reset to pending."
     exit 0
 fi
 
@@ -40,24 +68,25 @@ mkdir -p "$ITER_DIR"
 echo $$ > "$PID_FILE"
 
 log() {
-    local msg="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+    local msg="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [$CAMPAIGN] $*"
     echo "$msg" | tee -a "$LOG_FILE"
 }
 
 update_status() {
     local phase="$1" task_id="$2" detail="$3"
     local done_count pending_count blocked_count total_count
-    done_count=$(jq '[.[] | select(.status == "done")] | length' "$TASKS_FILE")
-    blocked_count=$(jq '[.[] | select(.status == "blocked")] | length' "$TASKS_FILE")
-    pending_count=$(jq '[.[] | select(.status == "pending" or .status == "in_progress")] | length' "$TASKS_FILE")
-    total_count=$(jq 'length' "$TASKS_FILE")
+    done_count=$(jq '[.tasks[] | select(.status == "done")] | length' "$TASKS_FILE")
+    blocked_count=$(jq '[.tasks[] | select(.status == "blocked")] | length' "$TASKS_FILE")
+    pending_count=$(jq '[.tasks[] | select(.status == "pending" or .status == "in_progress")] | length' "$TASKS_FILE")
+    total_count=$(jq '.tasks | length' "$TASKS_FILE")
 
     cat > "$STATUS_FILE" <<EOF
 === RALPH WIGGUM STATUS ===
-Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-Phase:   $phase
-Task:    $task_id
-Detail:  $detail
+Campaign: $CAMPAIGN
+Updated:  $(date -u +%Y-%m-%dT%H:%M:%SZ)
+Phase:    $phase
+Task:     $task_id
+Detail:   $detail
 
 Progress: $done_count / $total_count done  |  $blocked_count blocked  |  $pending_count remaining
 
@@ -70,32 +99,32 @@ EOF
 set_task_status() {
     local id="$1" status="$2"
     jq --arg id "$id" --arg s "$status" \
-        '[.[] | if .id == $id then .status = $s else . end]' \
+        '.tasks = [.tasks[] | if .id == $id then .status = $s else . end]' \
         "$TASKS_FILE" > tmp.$$.json && mv tmp.$$.json "$TASKS_FILE"
 }
 
 increment_attempts() {
     local id="$1"
     jq --arg id "$id" \
-        '[.[] | if .id == $id then .attempts += 1 else . end]' \
+        '.tasks = [.tasks[] | if .id == $id then .attempts += 1 else . end]' \
         "$TASKS_FILE" > tmp.$$.json && mv tmp.$$.json "$TASKS_FILE"
 }
 
 get_attempts() {
-    jq -r --arg id "$1" '.[] | select(.id == $id) | .attempts' "$TASKS_FILE"
+    jq -r --arg id "$1" '.tasks[] | select(.id == $id) | .attempts' "$TASKS_FILE"
 }
 
 # Return the next pending task whose dependencies are all done
 get_next_task() {
     local task_ids
-    task_ids=$(jq -r '.[] | select(.status == "pending") | .id' "$TASKS_FILE")
+    task_ids=$(jq -r '.tasks[] | select(.status == "pending") | .id' "$TASKS_FILE")
     for tid in $task_ids; do
         local deps_met=true
         local deps
-        deps=$(jq -r --arg id "$tid" '.[] | select(.id == $id) | .depends_on[]?' "$TASKS_FILE")
+        deps=$(jq -r --arg id "$tid" '.tasks[] | select(.id == $id) | .depends_on[]?' "$TASKS_FILE")
         for dep in $deps; do
             local dep_status
-            dep_status=$(jq -r --arg id "$dep" '.[] | select(.id == $id) | .status' "$TASKS_FILE")
+            dep_status=$(jq -r --arg id "$dep" '.tasks[] | select(.id == $id) | .status' "$TASKS_FILE")
             if [[ "$dep_status" != "done" ]]; then
                 deps_met=false
                 break
@@ -113,7 +142,7 @@ get_next_task() {
 build_prompt() {
     local task_id="$1"
     local task_json
-    task_json=$(jq --arg id "$task_id" '.[] | select(.id == $id)' "$TASKS_FILE")
+    task_json=$(jq --arg id "$task_id" '.tasks[] | select(.id == $id)' "$TASKS_FILE")
 
     local name description phase validation
     name=$(echo "$task_json" | jq -r '.name')
@@ -166,6 +195,7 @@ $(cat "$cf_path")
     cat <<PROMPT
 You are building the "0 Stars, 10/10" podcast pipeline from its implementation spec.
 
+## Campaign: $CAMPAIGN
 ## Task: $task_id — $name (Phase $phase)
 
 $description
@@ -207,7 +237,7 @@ auto_commit() {
 
     # Stage only the output files for this task
     local output_files
-    output_files=$(jq -r --arg id "$task_id" '.[] | select(.id == $id) | .output_files[]?' "$TASKS_FILE")
+    output_files=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .output_files[]?' "$TASKS_FILE")
 
     local staged=false
     for f in $output_files; do
@@ -228,7 +258,7 @@ auto_commit() {
 
     if $staged && ! git diff --cached --quiet 2>/dev/null; then
         git commit -m "$(cat <<EOF
-ralph: $task_id — $name
+ralph[$CAMPAIGN]: $task_id — $name
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -245,7 +275,7 @@ run_task() {
     local output_file="$ITER_DIR/iter-$(printf '%03d' "$iteration")-${task_id}.output"
 
     local name
-    name=$(jq -r --arg id "$task_id" '.[] | select(.id == $id) | .name' "$TASKS_FILE")
+    name=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .name' "$TASKS_FILE")
 
     log "ITER $iteration | Task: $task_id ($name) | Building prompt..."
     set_task_status "$task_id" "in_progress"
@@ -285,7 +315,7 @@ run_task() {
 
     # Run validation if specified
     local validation
-    validation=$(jq -r --arg id "$task_id" '.[] | select(.id == $id) | .validation // empty' "$TASKS_FILE")
+    validation=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .validation // empty' "$TASKS_FILE")
     if [[ -n "$validation" ]]; then
         log "ITER $iteration | Task: $task_id | Validating: $validation"
         local val_exit=0
@@ -322,12 +352,13 @@ run_convergence_format() {
     update_status "convergence" "ruff-format" "auto-formatting"
 
     cd "$PROJECT_ROOT"
-    ruff format lambdas/ tests/ 2>&1 | tee "$ITER_DIR/iter-$(printf '%03d' "$iteration")-conv-format.output" || true
+    # shellcheck disable=SC2086
+    ruff format $CONVERGENCE_LINT_PATHS 2>&1 | tee "$ITER_DIR/iter-$(printf '%03d' "$iteration")-conv-format.output" || true
 
     if ! git diff --quiet 2>/dev/null; then
         git add lambdas/ tests/
         git commit -m "$(cat <<EOF
-ralph: convergence — ruff format
+ralph[$CAMPAIGN]: convergence — ruff format
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -355,20 +386,20 @@ run_convergence_lint() {
         cd "$PROJECT_ROOT"
 
         # Auto-fix what ruff can
-        ruff check --fix lambdas/ tests/ 2>&1 > "$output_file" || true
+        # shellcheck disable=SC2086
+        ruff check --fix $CONVERGENCE_LINT_PATHS 2>&1 > "$output_file" || true
 
         # Collect remaining lint errors
         local lint_errors=""
-        lint_errors=$(ruff check lambdas/ tests/ 2>&1 || true)
+        # shellcheck disable=SC2086
+        lint_errors=$(ruff check $CONVERGENCE_LINT_PATHS 2>&1 || true)
 
         # Collect mypy errors
         local mypy_errors=""
-        mypy_errors=$(PYTHONPATH=lambdas/shared/python mypy --strict \
-            lambdas/shared/python/shared/ \
-            lambdas/discovery/ lambdas/research/ lambdas/script/ \
-            lambdas/producer/ lambdas/cover_art/ lambdas/tts/ \
-            lambdas/post_production/ lambdas/site/ lambdas/mcp/ \
-            2>&1 || true)
+        if [[ -n "$CONVERGENCE_MYPY_PATHS" ]]; then
+            # shellcheck disable=SC2086
+            mypy_errors=$(PYTHONPATH=lambdas/shared/python mypy --strict $CONVERGENCE_MYPY_PATHS 2>&1 || true)
+        fi
 
         echo "=== RUFF ===" >> "$output_file"
         echo "$lint_errors" >> "$output_file"
@@ -387,7 +418,7 @@ run_convergence_lint() {
             if ! git diff --quiet 2>/dev/null; then
                 git add lambdas/ tests/
                 git commit -m "$(cat <<EOF
-ralph: convergence — lint/type fixes
+ralph[$CAMPAIGN]: convergence — lint/type fixes
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -403,6 +434,7 @@ EOF
 
         cat > "$fix_prompt" <<FIXPROMPT
 You are fixing lint and type errors in the "0 Stars, 10/10" podcast pipeline.
+Campaign: $CAMPAIGN
 
 ## Errors to Fix
 
@@ -417,7 +449,7 @@ $mypy_errors
 2. Match the spec's type signatures exactly — read docs/spec/type-checking.md if unsure.
 3. For ruff: fix import ordering, unused imports, line length, etc.
 4. For mypy: add missing type annotations, fix type mismatches, add type: ignore only as last resort.
-5. After fixing, run: cd $PROJECT_ROOT && ruff check lambdas/ tests/ && PYTHONPATH=lambdas/shared/python mypy --strict lambdas/shared/python/shared/
+5. After fixing, run: cd $PROJECT_ROOT && ruff check $CONVERGENCE_LINT_PATHS && PYTHONPATH=lambdas/shared/python mypy --strict lambdas/shared/python/shared/
 FIXPROMPT
 
         log "CONV-LINT $lint_iter | Invoking claude to fix $((ruff_count + mypy_count)) errors..."
@@ -434,7 +466,7 @@ FIXPROMPT
         if ! git diff --quiet 2>/dev/null; then
             git add lambdas/ tests/
             git commit -m "$(cat <<EOF
-ralph: convergence — lint/type fix iter $lint_iter
+ralph[$CAMPAIGN]: convergence — lint/type fix iter $lint_iter
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -453,18 +485,26 @@ run_convergence_pytest() {
     local prev_fail_count=9999
     local stall_count=0
 
+    # For integration campaigns, gate on AWS credentials
+    if [[ "$CAMPAIGN" == "integration" ]]; then
+        if ! aws sts get-caller-identity &>/dev/null; then
+            log "CONV-TEST | SKIP — no AWS credentials for integration tests"
+            update_status "SKIPPED" "convergence" "no AWS credentials for integration campaign"
+            return 0
+        fi
+    fi
+
     while [[ $conv_iter -lt $MAX_CONVERGENCE ]]; do
         conv_iter=$((conv_iter + 1))
         local ci=$((base_iteration + conv_iter))
         local test_output="$ITER_DIR/iter-$(printf '%03d' "$ci")-conv-pytest.output"
 
-        log "CONV-TEST $conv_iter | Running pytest..."
-        update_status "convergence" "pytest-$conv_iter" "running unit tests"
+        log "CONV-TEST $conv_iter | Running: $CONVERGENCE_TEST_CMD"
+        update_status "convergence" "pytest-$conv_iter" "running tests"
 
         cd "$PROJECT_ROOT"
         local test_exit=0
-        PYTHONPATH=lambdas/shared/python pytest tests/unit/ -v --tb=short \
-            > "$test_output" 2>&1 || test_exit=$?
+        eval "$CONVERGENCE_TEST_CMD" > "$test_output" 2>&1 || test_exit=$?
 
         # Parse results
         local pass_count fail_count error_count
@@ -499,7 +539,7 @@ run_convergence_pytest() {
         # Find worst-failing test file
         local worst_test
         worst_test=$(grep -E "FAILED|ERROR" "$test_output" \
-            | sed -E 's#^(tests/unit/[^ :]+).*#\1#' \
+            | sed -E 's#^(tests/[^ :]+).*#\1#' \
             | sort | uniq -c | sort -rn | head -1 \
             | awk '{print $2}' || true)
 
@@ -524,6 +564,11 @@ run_convergence_pytest() {
                 resources) source_file="lambdas/mcp/resources.py" ;;
                 *)         source_file="lambdas/mcp/tools/${basename_noext}.py" ;;
             esac
+        elif [[ "$worst_test" == *"integration/twins/"* ]]; then
+            source_file="tests/integration/twins/${basename_noext}.py"
+        elif [[ "$worst_test" == *"integration/"* ]]; then
+            # Integration tests — source is the handler or twin
+            source_file="lambdas/${basename_noext//_live/}/handler.py"
         else
             source_file="lambdas/${basename_noext}/handler.py"
         fi
@@ -551,7 +596,8 @@ $(cat "$PROJECT_ROOT/$worst_test")
         fi
 
         cat > "$fix_prompt" <<FIXPROMPT
-You are fixing unit test failures in the "0 Stars, 10/10" podcast pipeline.
+You are fixing test failures in the "0 Stars, 10/10" podcast pipeline.
+Campaign: $CAMPAIGN
 
 ## Full Test Output
 $(cat "$test_output")
@@ -563,7 +609,7 @@ $(cat "$test_output")
 2. If a test imports a function that doesn't exist, create it in the source file with the expected signature.
 3. If a test asserts a specific return value, ensure the source returns exactly that.
 4. Read any spec files you need for context (docs/spec/type-checking.md, docs/spec/interface-contracts.md).
-5. After fixing, run: cd $PROJECT_ROOT && PYTHONPATH=lambdas/shared/python pytest $worst_test -v --tb=short
+5. After fixing, run: cd $PROJECT_ROOT && $CONVERGENCE_TEST_CMD
 
 $source_content
 $test_content
@@ -590,7 +636,7 @@ FIXPROMPT
         if ! git diff --quiet 2>/dev/null; then
             git add lambdas/ tests/ 2>/dev/null || true
             git commit -m "$(cat <<EOF
-ralph: convergence — pytest fix iter $conv_iter ($worst_test)
+ralph[$CAMPAIGN]: convergence — pytest fix iter $conv_iter ($worst_test)
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -607,21 +653,23 @@ EOF
 main() {
     log "=========================================="
     log "RALPH WIGGUM STARTING"
-    log "Project: $PROJECT_ROOT"
-    log "Model:   $MODEL"
+    log "Campaign: $CAMPAIGN"
+    log "Tasks:    $TASKS_FILE"
+    log "Project:  $PROJECT_ROOT"
+    log "Model:    $MODEL"
     log "=========================================="
 
     local iteration=0
 
-    # Phase 0–5: Create all files
+    # Build phase: create all files from tasks
     while true; do
         local next_task
         next_task=$(get_next_task)
 
         if [[ -z "$next_task" ]]; then
             local pending blocked
-            pending=$(jq '[.[] | select(.status == "pending")] | length' "$TASKS_FILE")
-            blocked=$(jq '[.[] | select(.status == "blocked")] | length' "$TASKS_FILE")
+            pending=$(jq '[.tasks[] | select(.status == "pending")] | length' "$TASKS_FILE")
+            blocked=$(jq '[.tasks[] | select(.status == "blocked")] | length' "$TASKS_FILE")
 
             if [[ "$pending" -gt 0 ]]; then
                 log "STUCK | $pending tasks pending with unmet deps, $blocked blocked"
@@ -651,12 +699,13 @@ main() {
 
     log "=========================================="
     log "RALPH WIGGUM FINISHED"
+    log "Campaign: $CAMPAIGN"
     log "=========================================="
 
     # Final status
     local done_count total_count
-    done_count=$(jq '[.[] | select(.status == "done")] | length' "$TASKS_FILE")
-    total_count=$(jq 'length' "$TASKS_FILE")
+    done_count=$(jq '[.tasks[] | select(.status == "done")] | length' "$TASKS_FILE")
+    total_count=$(jq '.tasks | length' "$TASKS_FILE")
     update_status "FINISHED" "summary" "$done_count/$total_count tasks done"
 }
 

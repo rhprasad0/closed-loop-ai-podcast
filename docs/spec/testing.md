@@ -3356,9 +3356,177 @@ def test_download_file_calls_download():
     assert "key/file.mp3" in str(call_args)
 ```
 
-### Integration Test Pattern
+### Integration Test Pattern — Digital Twin Universe
 
-Integration tests hit real AWS services and external APIs. They are marked with `@pytest.mark.integration` and excluded from CI by default. They require real AWS credentials (configured via environment or `~/.aws`).
+Integration tests exercise real handler code with real Bedrock Haiku and controlled external inputs. They use a Digital Twin Universe (DTU): behavioral clones of third-party HTTP APIs (Exa, GitHub, ElevenLabs) running as local pytest-httpserver instances, while real AWS services (Bedrock, S3, Secrets Manager, RDS) are used directly.
+
+Tests are marked with `@pytest.mark.integration` and excluded from CI by default. They require AWS credentials (`~/.aws`), `DB_CONNECTION_STRING`, and installed `pytest-httpserver`.
+
+#### Architecture
+
+**Why only HTTP APIs get twins:**
+- AWS services (Bedrock, S3, Secrets Manager, RDS) are used directly — no mocking, no LocalStack
+- Third-party HTTP APIs (Exa, GitHub, ElevenLabs) get twin servers because they have rate limits, costs, and return non-deterministic real-world data that makes assertions impossible
+- Twin servers give controlled, repeatable inputs for LLM agents to reason over
+
+**Service boundary strategy:**
+
+| Service | Unit Tests | Integration Tests |
+|---|---|---|
+| Bedrock Claude | Fully mocked | Real Haiku (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) via `BEDROCK_MODEL_ID` env var |
+| Exa API | Mocked urlopen | HTTP twin (pytest-httpserver) — controlled search results |
+| GitHub API | Mocked urlopen | HTTP twin (pytest-httpserver) — fixture repos and users |
+| ElevenLabs API | Mocked urlopen | HTTP twin (pytest-httpserver) — returns silent MP3 |
+| Postgres/RDS | Mocked psycopg2 | Real RDS — test data isolated by `integration-test-{uuid}` execution_id prefix |
+| S3 | Mocked boto3 | Real S3 — ephemeral test bucket created/destroyed per session |
+| Secrets Manager | Mocked boto3 | Real Secrets Manager — ephemeral test secrets per session |
+| Nova Canvas | Mocked boto3 | Mocked (no cheap tier available) |
+
+**Cost per integration run:** ~$0.03 (9 Bedrock Haiku calls at ~$0.003 each). S3 and Secrets Manager costs negligible.
+
+#### Directory Structure
+
+```
+tests/integration/
+├── __init__.py
+├── conftest.py                       # DTU orchestration: twins, URL redirect, AWS setup
+├── twins/
+│   ├── __init__.py
+│   ├── fixtures.py                   # Shared fixture data (repos, users, search results)
+│   ├── github_twin.py                # GitHub API behavioral clone
+│   ├── exa_twin.py                   # Exa search API behavioral clone
+│   └── elevenlabs_twin.py            # ElevenLabs text-to-dialogue clone
+├── test_discovery_live.py
+├── test_research_live.py
+├── test_script_live.py
+├── test_producer_live.py
+├── test_cover_art_live.py
+├── test_tts_live.py
+├── test_post_production_live.py
+├── test_chain_discovery_to_script.py # Chain: Discovery -> Research -> Script
+└── test_chain_full_pipeline.py       # Chain: full pipeline minus TTS
+```
+
+#### Twin Server Specifications
+
+Each twin implements the behavioral contract from `external-api-contracts.md`, returning realistic response shapes with plausible data. All twins use `pytest-httpserver` — a real HTTP server bound to localhost on a random port, managed as a pytest fixture.
+
+**GitHub API Twin (`twins/github_twin.py`):**
+- `GET /users/{username}` — returns realistic user profile JSON for fixture users
+- `GET /users/{username}/repos` — returns array of repos, supports `sort` and `per_page` params
+- `GET /repos/{owner}/{repo}` — returns repo metadata for known fixture repos
+- `GET /repos/{owner}/{repo}/readme` — returns base64-encoded README content
+- `GET /search/repositories` — returns search results filtered from fixture set
+- Stateful: tracks which endpoints were called and in what order (for asserting Discovery/Research agent tool-use behavior)
+- Fixture data: 5 GitHub users with profiles, repos (mix of <10 and >10 stars), 2 previously-featured developers
+
+**Exa API Twin (`twins/exa_twin.py`):**
+- `POST /search` — accepts camelCase body, returns realistic search results pointing to repos in the GitHub twin's fixture set
+- Returns 2-3 results per search, including at least one repo with stars < 10 (the pipeline's target)
+- Stateful: tracks search queries to verify the Discovery agent makes multiple searches and refines queries
+
+**ElevenLabs API Twin (`twins/elevenlabs_twin.py`):**
+- `POST /v1/text-to-dialogue` — validates request body shape (inputs array, model_id, voice_ids)
+- Validates that all voice IDs are from the known set (Hype=`cjVigY5qzO86Huf0OWal`, Roast=`JBFqnCBsd6RMkjVDRZzb`, Phil=`cgSgspJ2msm6clMCkdW9`)
+- Validates character count < 5000
+- Returns small valid MP3 bytes (silent audio, ~1KB) with proper content-type header
+
+#### Integration Conftest (`tests/integration/conftest.py`)
+
+The conftest is the heart of the DTU. It sets up and tears down all test infrastructure.
+
+**Session-scoped fixtures (created once per test session):**
+- `github_twin` — starts GitHub API twin server, yields server URL
+- `exa_twin` — starts Exa API twin server, yields server URL
+- `elevenlabs_twin` — starts ElevenLabs API twin server, yields server URL
+- `redirect_urls` — monkeypatches `urllib.request.urlopen` to redirect `api.github.com`, `api.exa.ai`, and `api.elevenlabs.io` URLs to the local twin servers
+- `bedrock_model_override` — sets `BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0` in the environment
+- `test_s3_bucket` — creates ephemeral S3 bucket (`zerostars-integration-test-{uuid}`), sets `S3_BUCKET` env var, destroys bucket on teardown
+- `test_secrets` — creates test secrets in Secrets Manager (`integration-test/exa-api-key`, `integration-test/elevenlabs-api-key`) with dummy values, destroys on teardown
+- `inject_api_keys` — sets handler module caches (`_exa_api_key`, `_elevenlabs_api_key`) to dummy values matching the test secrets
+
+**Function-scoped fixtures (created per test):**
+- `test_execution_id` — generates unique `integration-test-{uuid}` execution_id per test
+- `pipeline_metadata` — returns `{"execution_id": test_execution_id, "script_attempt": 1}`
+- `lambda_context` — MagicMock Lambda context (same pattern as unit test conftest)
+- `seed_featured_developers` — inserts 2 featured developers with test execution_ids into Postgres
+- `cleanup_test_data` — yield fixture that DELETEs all rows WHERE execution_id LIKE 'integration-test-%' after the test completes
+
+**Skip guards:**
+- `pytest.skip("AWS credentials not available")` if `aws sts get-caller-identity` fails
+- `pytest.skip("DB_CONNECTION_STRING not set")` if the env var is missing
+
+#### Handler Integration Test Specifications
+
+**Assertion strategy (non-deterministic LLM outputs):**
+- **Structural assertions (required, hard fail):** All required TypedDict keys present with correct types. Business rule invariants enforced (star_count < 10, character_count < 5000, etc.).
+- **Behavioral assertions (soft, logged):** Agent tool-use patterns (e.g., Discovery made >= 2 Exa searches), persona names present in script text. Logged as warnings, not test failures.
+- **Flaky handling:** `@pytest.mark.flaky(reruns=2)` on all tests that invoke Bedrock. An LLM can occasionally produce invalid JSON or exceed limits. Two retries handle transient failures without masking real bugs.
+
+**Discovery integration test (`test_discovery_live.py`):**
+- Seeds Postgres with 2 previously-featured developers
+- Configures Exa twin with fixture search results (mix of featured and unfeatured repos)
+- Configures GitHub twin with metadata for all fixture repos
+- Calls `lambda_handler(event, context)` directly
+- Structural assertions: returns valid `DiscoveryOutput`, `star_count < 10`, chosen repo URL starts with `https://github.com/`, all required keys present
+- Behavioral assertions: chosen repo is NOT one of the featured developers, agent made >= 2 Exa searches (verified via twin state), agent called >= 1 GitHub repo lookup
+
+**Research integration test (`test_research_live.py`):**
+- Configures GitHub twin with detailed data for the target developer
+- Calls `lambda_handler(event, context)` with discovery output pointing to a twin-known developer
+- Structural assertions: returns valid `ResearchOutput`, `developer_github` matches input, `notable_repos` is non-empty list
+- Behavioral assertions: agent called `get_github_user`, `get_user_repos`, and at least one `get_repo_readme`
+
+**Script integration test (`test_script_live.py`):**
+- Calls `lambda_handler(event, context)` with fixture discovery + research data
+- Structural assertions: returns valid `ScriptOutput`, `character_count < 5000`, segments match `REQUIRED_SEGMENTS` (intro, core_debate, developer_deep_dive, technical_appreciation, hiring_manager, outro), `featured_repo` matches input
+- Behavioral assertions: script text contains all three persona names (Hype, Roast, Phil)
+
+**Producer integration test (`test_producer_live.py`):**
+- Calls with a known-good script fixture
+- Structural assertions: returns valid `ProducerOutput`, `verdict` in `("PASS", "FAIL")`, `score` in range 1-10
+- Note: verdict is non-deterministic. The test validates structure, not the specific verdict.
+
+**Cover Art integration test (`test_cover_art_live.py`):**
+- Uses real S3 (ephemeral test bucket)
+- Mocks Nova Canvas `_generate_image` to return a small valid PNG (no cheap tier for image generation)
+- Structural assertions: returns valid output dict, S3 key matches expected pattern, S3 upload succeeded (verify object exists in bucket)
+
+**TTS integration test (`test_tts_live.py`):**
+- Uses ElevenLabs twin (returns silent MP3) and real S3
+- Structural assertions: returns valid `TTSOutput`, `s3_key` format matches `episodes/{execution_id}/episode.mp3`, `duration_seconds` is positive
+- Behavioral assertions: twin received exactly 1 request, request body had correct voice IDs and model_id
+
+**Post-Production integration test (`test_post_production_live.py`):**
+- Uses real S3 with pre-uploaded small test MP3 and PNG files
+- Uses real Postgres
+- Uses real ffmpeg (installed in devcontainer)
+- Structural assertions: returns valid `PostProductionOutput`, `episode_id` is a positive integer, episode record exists in Postgres with correct execution_id
+
+#### Chain Test Specifications
+
+Chain tests string multiple handlers together, feeding real output from one as input to the next. They validate the full pipeline data flow without Step Functions.
+
+**Discovery -> Research -> Script chain (`test_chain_discovery_to_script.py`):**
+1. Run Discovery handler with twins — get real `DiscoveryOutput`
+2. Feed discovery output as `$.discovery` into Research handler — get real `ResearchOutput`
+3. Feed both into Script handler — get real `ScriptOutput`
+4. Assert: script references the discovered repo, character count valid, all segments present
+5. This is the highest-value integration test — catches schema mismatches between handlers that unit tests cannot detect
+
+**Full pipeline chain (`test_chain_full_pipeline.py`):**
+1. Discovery -> Research -> Script -> Producer -> CoverArt
+2. If Producer returns FAIL, feeds feedback back into Script (tests the retry loop, up to 2 retries)
+3. PostProduction skipped (needs real MP3 from TTS; TTS twin returns fake audio that won't produce a valid MP4)
+4. Assert: each handler output is valid, data flows correctly between stages
+
+#### Test Data Strategy
+
+All test data in production Postgres uses the `integration-test-{uuid}` execution_id prefix:
+- Each test gets a unique execution_id via the `test_execution_id` fixture
+- The `cleanup_test_data` fixture DELETEs all rows WHERE `execution_id LIKE 'integration-test-%'` after each test
+- Seed data (featured developers, benchmark episodes) is inserted with test execution_ids
+- No schema changes, no separate database — same tables as production
 
 #### Generic Bedrock Integration Test (`tests/integration/test_bedrock_live.py`)
 
