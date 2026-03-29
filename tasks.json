@@ -42,7 +42,7 @@
       "p0-scaffold"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.types import PipelineState, DiscoveryOutput, ResearchOutput, ScriptOutput, ProducerOutput, CoverArtOutput, TTSOutput, PostProductionOutput'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -64,7 +64,7 @@
       "p0-scaffold"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.logging import get_logger; from shared.tracing import get_tracer; from shared.metrics import get_metrics'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -90,7 +90,7 @@
       "p1-observability"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.bedrock import invoke_model, invoke_with_tools'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -116,7 +116,7 @@
       "p1-observability"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from shared.db import get_connection, query, execute; from shared.s3 import upload_bytes, upload_file, download_file, generate_presigned_url'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -145,7 +145,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.discovery.handler import lambda_handler, _parse_discovery_output'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -173,7 +173,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.research.handler import lambda_handler, _parse_research_output'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -199,8 +199,8 @@
       "p1-bedrock"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.script.handler import lambda_handler, _parse_script_output'",
-    "status": "pending",
-    "attempts": 0
+    "status": "done",
+    "attempts": 1
   },
   {
     "id": "p2-producer",
@@ -228,7 +228,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.producer.handler import lambda_handler, _parse_producer_output'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -256,7 +256,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.cover_art.handler import lambda_handler, _generate_image'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -281,7 +281,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.tts.handler import lambda_handler, _parse_dialogue_turns'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -308,7 +308,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.post_production.handler import lambda_handler'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -335,7 +335,7 @@
       "p1-db-s3"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && PYTHONPATH=lambdas/shared/python python3 -c 'from lambdas.site.handler import lambda_handler'",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -354,7 +354,7 @@
       "p0-scaffold"
     ],
     "validation": null,
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
@@ -377,7 +377,7 @@
       "p0-scaffold"
     ],
     "validation": "cd /workspaces/closed-loop-ai-podcast && bash -n build-all.sh && bash -n lambdas/shared/build.sh && bash -n layers/ffmpeg/build.sh",
-    "status": "pending",
+    "status": "done",
     "attempts": 0
   },
   {
