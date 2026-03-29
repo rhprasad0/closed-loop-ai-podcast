@@ -74,7 +74,9 @@ RUN pip install --no-cache-dir \
         pytest-httpserver \
         pytest-rerunfailures \
         pytest-timeout \
-        moto
+        moto \
+        mcp \
+        aws-xray-sdk
 
 # uv (provides uvx, used by Claude Code MCP servers)
 RUN pip install --no-cache-dir uv

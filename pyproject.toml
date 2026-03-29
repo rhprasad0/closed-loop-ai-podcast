@@ -34,7 +34,7 @@ line-length = 100
 select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["E501", "F841"]
+"tests/**" = ["E501", "F841", "N806"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["lambdas", "shared", "tests"]
