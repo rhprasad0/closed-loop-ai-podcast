@@ -175,6 +175,18 @@ All agent invocation tools use direct synchronous Lambda invoke (`lambda:InvokeF
 
 **Why direct invoke, not Step Functions:** Step Functions executions are asynchronous. Direct invoke is synchronous and returns within the Lambda timeout, giving an interactive experience. The trade-off is that direct invokes bypass Step Functions retry/catch logic, but that is acceptable for interactive exploration.
 
+**Lambda function naming convention:** All agent invocation tools use the hardcoded function name pattern `zerostars-{agent}`, where `{agent}` is the lowercase handler name (with hyphens for multi-word names). These names come from the Terraform `aws_lambda_function` resources in `lambdas.tf`, which use `${var.project_prefix}-{name}` with `project_prefix = "zerostars"`. The 7 function names are:
+
+| Tool | Lambda Function Name |
+|------|---------------------|
+| `invoke_discovery` | `zerostars-discovery` |
+| `invoke_research` | `zerostars-research` |
+| `invoke_script` | `zerostars-script` |
+| `invoke_producer` | `zerostars-producer` |
+| `invoke_cover_art` | `zerostars-cover-art` |
+| `invoke_tts` | `zerostars-tts` |
+| `invoke_post_production` | `zerostars-post-production` |
+
 #### `invoke_discovery`
 
 Run the Discovery agent to find an underrated GitHub repo.
@@ -782,6 +794,110 @@ Read-only data that Claude can browse without invoking a tool.
 | `zerostars://pipeline/status` | Currently running executions and last 5 completed | `states:ListExecutions` |
 | `zerostars://featured-developers` | All featured developers with episode ID and date | Postgres `featured_developers` joined with `episodes` |
 
+### Resource Return Schemas
+
+#### `zerostars://episodes`
+
+Returns a JSON array of episode summary objects (excludes large text fields):
+
+```json
+[
+  {
+    "episode_id": 1,
+    "air_date": "2025-07-06",
+    "repo_name": "cool-project",
+    "developer_github": "username",
+    "star_count_at_recording": 7,
+    "producer_attempts": 1
+  }
+]
+```
+
+#### `zerostars://episodes/{episode_id}`
+
+Returns a single episode object with full detail (includes large text fields):
+
+```json
+{
+  "episode_id": 1,
+  "air_date": "2025-07-06",
+  "repo_name": "cool-project",
+  "developer_github": "username",
+  "developer_name": "Display Name",
+  "star_count_at_recording": 7,
+  "language": "Rust",
+  "script_text": "**Hype:** Welcome back...",
+  "research_json": "{\"developer_name\": \"...\", ...}",
+  "cover_art_prompt": "Three robots examining...",
+  "s3_cover_art_path": "episodes/exec-id/cover.png",
+  "s3_mp3_path": "episodes/exec-id/episode.mp3",
+  "s3_mp4_path": "episodes/exec-id/episode.mp4",
+  "producer_attempts": 1,
+  "execution_id": "arn:aws:states:..."
+}
+```
+
+#### `zerostars://metrics`
+
+Returns a JSON array of engagement metrics per episode, ordered by views descending:
+
+```json
+[
+  {
+    "episode_id": 1,
+    "repo_name": "cool-project",
+    "developer_github": "username",
+    "linkedin_post_url": "https://linkedin.com/post/1",
+    "views": 1200,
+    "likes": 45,
+    "comments": 12,
+    "shares": 8,
+    "snapshot_date": "2025-07-10"
+  }
+]
+```
+
+#### `zerostars://pipeline/status`
+
+Returns pipeline execution status with currently running and recent completed executions:
+
+```json
+{
+  "currently_running": [
+    {
+      "executionArn": "arn:aws:states:...",
+      "name": "weekly-20250713T090000Z",
+      "status": "RUNNING",
+      "startDate": "2025-07-13T09:00:00Z"
+    }
+  ],
+  "recent": [
+    {
+      "executionArn": "arn:aws:states:...",
+      "name": "weekly-20250706T090000Z",
+      "status": "SUCCEEDED",
+      "startDate": "2025-07-06T09:00:00Z",
+      "stopDate": "2025-07-06T09:12:34Z"
+    }
+  ]
+}
+```
+
+#### `zerostars://featured-developers`
+
+Returns a JSON array of all featured developers with episode context:
+
+```json
+[
+  {
+    "developer_github": "username",
+    "episode_id": 1,
+    "featured_date": "2025-07-06",
+    "repo_name": "cool-project"
+  }
+]
+```
+
 ---
 
 ## Lambda File Structure
@@ -801,6 +917,42 @@ lambdas/mcp/
 ```
 
 `handler.py` creates the MCP server instance, registers all tools and resources, and wires up the Streamable HTTP transport for the Lambda Function URL. Each tool module imports boto3 clients and the shared DB connection helper at module level (cached across warm invocations).
+
+### Handler Entry Point
+
+`handler.py` exports two key functions:
+
+```python
+from mcp.server import Server
+
+
+def create_mcp_server() -> Server:
+    """Create and configure the MCP server instance.
+
+    Registers all 26 tools from the 6 tool modules and all 5 resources
+    from resources.py. Returns a configured Server instance.
+
+    Tool registration uses the @server.tool() decorator pattern from
+    the mcp Python SDK. Resource registration uses @server.resource().
+    """
+    ...
+
+
+def lambda_handler(event: dict, context: Any) -> dict:
+    """Lambda entry point. Creates the MCP server via create_mcp_server(),
+    wraps it in StreamableHTTPServerTransport, and processes the
+    Lambda Function URL event.
+    """
+    ...
+```
+
+The `create_mcp_server` function is separated from `lambda_handler` so that tests can import and inspect the server's registered tools and resources without triggering the transport layer. See `test_handler.py` in [Testing — MCP](./testing-mcp.md) for usage:
+
+```python
+from lambdas.mcp.handler import create_mcp_server
+server = create_mcp_server()
+tool_names = {t.name for t in server.list_tools()}
+```
 
 ### Dependencies
 

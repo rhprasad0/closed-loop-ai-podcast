@@ -57,7 +57,9 @@ text = next(b["text"] for b in reversed(result["content"]) if b["type"] == "text
 #       tools: list[dict],
 #       tool_executor: Callable[[str, dict], str],  # (tool_name, tool_input) -> JSON string
 #       model_id: str = DEFAULT_MODEL_ID,
+#       max_tokens: int = 16384,
 #       max_turns: int = 25,  # safety valve on loop iterations
+#       effort: str = "high",  # agentic loops use high effort
 #   ) -> str
 #
 # The function loops internally:
@@ -65,7 +67,14 @@ text = next(b["text"] for b in reversed(result["content"]) if b["type"] == "text
 #   2. If stop_reason == "tool_use": extract tool_use blocks, call tool_executor
 #      for each, append tool_result messages, re-invoke
 #   3. If stop_reason == "end_turn": return the text response
-#   4. Retry on ThrottlingException with exponential backoff (3 retries, 1s base)
+#   4. If the loop exceeds max_turns iterations, raise RuntimeError("max_turns exceeded")
+#   5. Retry on ThrottlingException with exponential backoff (3 retries, 1s base,
+#      2x factor, no jitter). Retry wraps each individual invoke_model call inside
+#      the tool loop. On exhaustion, the ThrottlingException propagates to the caller.
+#
+# Client caching: bedrock.py caches the boto3.client("bedrock-runtime") at module
+# level, created on first call to invoke_model or invoke_with_tools. Same pattern
+# as Cover Art's _bedrock_client.
 #
 # Example handler usage (Discovery):
 
@@ -256,7 +265,11 @@ Request body:
     "text": true
   }
 }
+```
 
+The handler always adds `"contents": {"text": true}` to the Exa request body, regardless of whether the agent included it in the tool input. This ensures result text is always available for downstream processing.
+
+```
 Response (200 OK):
 {
   "requestId": "...",
@@ -302,15 +315,17 @@ The Discovery agent queries Postgres to check whether candidate projects/develop
 3. **Executes query via `shared/db.py`:**
 
 ```python
-from shared.db import query
+from shared.db import query as db_query
 
-rows = query(sql, statement_timeout_ms=15000)
+rows = db_query(sql)
 ```
 
-- `statement_timeout` of 15 seconds prevents runaway queries from consuming the Lambda's 300s budget.
-- `shared/db.py` manages connection pooling and returns rows as a list of dicts (column names as keys).
+- `shared/db.py`'s `query()` function signature is `query(sql, params=None)`. It returns rows as a list of tuples.
+- The handler converts rows to dicts using `cursor.description` column names internally.
 - On error, returns `{"error": "<message truncated to 500 chars>"}`.
 - On success, returns `{"rows": <list of row dicts>}`.
+
+> **Note:** The `query()` function does not accept a `statement_timeout` parameter. Callers that need query timeouts (like the MCP `run_sql` tool) set `statement_timeout` at the cursor level directly via `SET statement_timeout = '...'` before executing the query.
 
 ### Discovery GitHub Tool (`get_github_repo`)
 
@@ -457,3 +472,121 @@ API endpoints and key response fields:
 
 - `GET https://api.github.com/search/repositories?q={query}&sort={sort}&per_page={per_page}`
   → `total_count`, `items` (array of repo objects with same fields as above)
+
+### Research GitHub Tool Curated Fields
+
+The Research handler filters GitHub API responses before returning them to the agent. Each `_execute_*` function extracts only the fields listed below, discarding all others (the full API responses are too large for the Bedrock conversation context).
+
+All GitHub API calls include headers:
+- `Accept: application/vnd.github+json`
+- `User-Agent: zerostars-research-agent`
+
+All calls use a **15-second timeout** via `urllib.request.urlopen(req, timeout=15)`. On `urllib.error.HTTPError` or `socket.timeout`, each function returns `{"error": "<description>"}` instead of raising — so the agent sees errors and can adapt (retry, pick a different candidate).
+
+#### `_execute_get_github_user`
+
+`GET https://api.github.com/users/{username}`
+
+Returns:
+
+```python
+{
+    "login": data["login"],
+    "name": data["name"],
+    "bio": data["bio"],
+    "public_repos": data["public_repos"],
+    "followers": data["followers"],
+    "created_at": data["created_at"],
+    "html_url": data["html_url"],
+}
+```
+
+Filtered out: `id`, `node_id`, `avatar_url`, and ~25 other fields from the full API response.
+
+#### `_execute_get_user_repos`
+
+`GET https://api.github.com/users/{username}/repos?sort={sort}&per_page={per_page}`
+
+Returns an **array** of curated repo objects:
+
+```python
+[
+    {
+        "name": repo["name"],
+        "description": repo["description"],
+        "stargazers_count": repo["stargazers_count"],
+        "language": repo["language"],
+        "html_url": repo["html_url"],
+        "pushed_at": repo["pushed_at"],
+        "fork": repo["fork"],
+    }
+    for repo in data
+]
+```
+
+Filtered out: `id`, `node_id`, `size`, and ~60 other fields per repo object.
+
+**Dual return type:** Returns `list[dict]` on success, `dict` (with `"error"` key) on failure. This differs from all other tool functions which always return `dict`.
+
+#### `_execute_get_repo_details`
+
+`GET https://api.github.com/repos/{owner}/{repo}`
+
+Returns:
+
+```python
+{
+    "name": data["name"],
+    "full_name": data["full_name"],
+    "description": data["description"],
+    "stargazers_count": data["stargazers_count"],
+    "forks_count": data["forks_count"],
+    "language": data["language"],
+    "topics": data["topics"],
+    "created_at": data["created_at"],
+    "updated_at": data["updated_at"],
+    "html_url": data["html_url"],
+}
+```
+
+Filtered out: `id`, `size`, and ~70 other fields from the full API response.
+
+#### `_execute_get_repo_readme`
+
+`GET https://api.github.com/repos/{owner}/{repo}/readme`
+
+The handler **base64-decodes** the `content` field before returning. The GitHub API returns the README as base64-encoded text in the `content` field with `encoding: "base64"`.
+
+```python
+import base64
+
+decoded = base64.b64decode(data["content"]).decode()
+return {"content": decoded}
+```
+
+This is the only tool that transforms the response data (decode) rather than just filtering fields. The agent receives plain text, not base64.
+
+#### `_execute_search_repositories`
+
+`GET https://api.github.com/search/repositories?q={query}&sort={sort}&per_page={per_page}`
+
+Returns:
+
+```python
+{
+    "total_count": data["total_count"],
+    "items": [
+        {
+            "name": item["name"],
+            "full_name": item["full_name"],
+            "description": item["description"],
+            "stargazers_count": item["stargazers_count"],
+            "language": item["language"],
+            "html_url": item["html_url"],
+        }
+        for item in data["items"]
+    ],
+}
+```
+
+Filtered out from items: `id`, `score`, and ~60 other fields per item.

@@ -473,7 +473,7 @@ def mock_cover_art_prompt_template():
 | S3 | `moto` `@mock_aws` decorator — creates in-memory S3. | Real S3 bucket in dev account with `test/` key prefix. |
 | S3 (Cover Art upload) | `unittest.mock` — patch `upload_bytes` at `lambdas.cover_art.handler.upload_bytes`. | Real S3 bucket (tested transitively via E2E). |
 | Postgres (shared/db.py) | `unittest.mock` — patch `psycopg2.connect`, mock cursor `fetchall`/`execute`. | Real dev RDS instance. |
-| Postgres (Discovery) | `unittest.mock` — patch `shared.db.query` at `lambdas.discovery.handler.query`. | Real dev RDS instance (see Discovery integration tests). |
+| Postgres (Discovery) | `unittest.mock` — patch `shared.db.query` at `lambdas.discovery.handler.db_query`. | Real dev RDS instance (see Discovery integration tests). |
 | Postgres (Producer/shared.db) | `unittest.mock` — patch `shared.db.query` at `lambdas.producer.handler.query`. | Real dev RDS instance (see `test_producer_db_benchmark_query` integration test). |
 | Secrets Manager (Exa key) | `unittest.mock` — patch `boto3` in `lambdas.discovery.handler`, mock `get_secret_value` return value. Reset module-level `_exa_api_key` cache. | Skip — uses real secret, tested transitively via E2E. |
 | Exa API | `unittest.mock` — patch `urllib.request.urlopen`. | Skip — costs money per query. |
@@ -559,60 +559,77 @@ def test_parse_rejects_invalid_json():
 ```python
 from unittest.mock import patch
 
-def test_execute_query_select_allowed(mock_db_connection):
+
+def test_execute_query_postgres_returns_rows():
     from lambdas.discovery.handler import _execute_query_postgres
-    mock_db_connection.cursor.return_value.fetchall.return_value = [("user1",), ("user2",)]
-    result = _execute_query_postgres({"sql": "SELECT developer_github FROM featured_developers;"})
+    with patch("lambdas.discovery.handler.db_query") as mock_query:
+        mock_query.return_value = [("user1",), ("user2",)]
+        result = _execute_query_postgres({"sql": "SELECT developer_github FROM featured_developers"})
+
     assert "rows" in result
-    assert "user1" in result["rows"][0]
+    assert len(result["rows"]) == 2
 
 
-def test_execute_query_rejects_insert():
+def test_execute_query_postgres_rejects_insert():
     from lambdas.discovery.handler import _execute_query_postgres
-    result = _execute_query_postgres({"sql": "INSERT INTO episodes VALUES (1, 'x');"})
+    result = _execute_query_postgres({"sql": "INSERT INTO episodes (repo_name) VALUES ('x')"})
     assert "error" in result
 
 
-def test_execute_query_rejects_delete():
+def test_execute_query_postgres_rejects_delete():
     from lambdas.discovery.handler import _execute_query_postgres
-    result = _execute_query_postgres({"sql": "DELETE FROM episodes;"})
+    result = _execute_query_postgres({"sql": "DELETE FROM episodes"})
     assert "error" in result
 
 
-def test_execute_query_rejects_drop():
+def test_execute_query_postgres_rejects_drop():
     from lambdas.discovery.handler import _execute_query_postgres
-    result = _execute_query_postgres({"sql": "DROP TABLE episodes;"})
+    result = _execute_query_postgres({"sql": "DROP TABLE episodes"})
     assert "error" in result
 
 
-def test_execute_query_rejects_update():
+def test_execute_query_postgres_rejects_update():
     from lambdas.discovery.handler import _execute_query_postgres
-    result = _execute_query_postgres({"sql": "UPDATE episodes SET repo_name = 'x';"})
+    result = _execute_query_postgres({"sql": "UPDATE episodes SET repo_name = 'x'"})
     assert "error" in result
 
 
-def test_execute_query_leading_whitespace_select(mock_db_connection):
+def test_execute_query_postgres_leading_whitespace_select():
     from lambdas.discovery.handler import _execute_query_postgres
-    mock_db_connection.cursor.return_value.fetchall.return_value = [("ok",)]
-    result = _execute_query_postgres({"sql": "   SELECT 1;"})
+    with patch("lambdas.discovery.handler.db_query") as mock_query:
+        mock_query.return_value = [(1,)]
+        result = _execute_query_postgres({"sql": "   SELECT 1"})
+
     assert "rows" in result
 
 
-def test_execute_query_error_returns_error(mock_db_connection):
+def test_execute_query_postgres_case_insensitive_select():
     from lambdas.discovery.handler import _execute_query_postgres
-    from psycopg2 import OperationalError
-    mock_db_connection.cursor.return_value.execute.side_effect = OperationalError("relation does not exist")
-    result = _execute_query_postgres({"sql": "SELECT * FROM nonexistent;"})
-    assert "error" in result
-    assert "relation" in result["error"]
+    with patch("lambdas.discovery.handler.db_query") as mock_query:
+        mock_query.return_value = [(1,)]
+        result = _execute_query_postgres({"sql": "select developer_github from featured_developers"})
+
+    assert "rows" in result
 
 
-def test_execute_query_timeout_returns_error(mock_db_connection):
+def test_execute_query_postgres_error_returns_error_dict():
     from lambdas.discovery.handler import _execute_query_postgres
-    from psycopg2 import OperationalError
-    mock_db_connection.cursor.return_value.execute.side_effect = OperationalError("query timeout")
-    result = _execute_query_postgres({"sql": "SELECT pg_sleep(999);"})
+    with patch("lambdas.discovery.handler.db_query") as mock_query:
+        mock_query.side_effect = Exception("connection refused")
+        result = _execute_query_postgres({"sql": "SELECT 1"})
+
     assert "error" in result
+    assert "connection refused" in result["error"]
+
+
+def test_execute_query_postgres_truncates_long_errors():
+    from lambdas.discovery.handler import _execute_query_postgres
+    with patch("lambdas.discovery.handler.db_query") as mock_query:
+        mock_query.side_effect = Exception("x" * 1000)
+        result = _execute_query_postgres({"sql": "SELECT 1"})
+
+    assert "error" in result
+    assert len(result["error"]) <= 500
 ```
 
 #### GitHub and Exa Tool Tests
@@ -1751,6 +1768,11 @@ VALID_FAIL_OUTPUT = {
 }
 
 
+# Note: The exact SQL of BENCHMARK_QUERY is not asserted in unit tests because
+# the query text is an implementation detail. Integration tests (test_db_live.py)
+# verify the JOIN works against real Postgres with actual episode_metrics data.
+
+
 def test_parse_valid_pass_json():
     result = _parse_producer_output(json.dumps(VALID_PASS_OUTPUT))
     assert result["verdict"] == "PASS"
@@ -2075,6 +2097,8 @@ def test_handler_queries_database_for_benchmark_scripts(
             lambda_context,
         )
     mock_producer_db_query.assert_called_once()
+    # Note: _fetch_benchmark_scripts internally does [row[0] for row in rows]
+    # to convert the query result tuples to a flat list of script_text strings.
 
 
 def test_handler_handles_fenced_output(
@@ -2489,6 +2513,797 @@ def test_handler_propagates_bedrock_runtime_error(
                 },
                 lambda_context,
             )
+```
+
+### TTS Unit Tests
+
+Tests for the TTS handler (`tests/unit/test_tts.py`). The TTS handler parses a dialogue script into speaker turns, maps each speaker to an ElevenLabs voice ID, calls the ElevenLabs text-to-dialogue API, and uploads the resulting MP3 to S3.
+
+#### TTS Fixtures
+
+```python
+@pytest.fixture
+def mock_elevenlabs_api_key():
+    """Mock Secrets Manager for ElevenLabs API key, reset module-level cache."""
+    import lambdas.tts.handler as tts_module
+    tts_module._elevenlabs_api_key = None
+    with patch("lambdas.tts.handler.boto3") as mock_boto3:
+        mock_sm = MagicMock()
+        mock_boto3.client.return_value = mock_sm
+        mock_sm.get_secret_value.return_value = {"SecretString": "test-elevenlabs-key"}
+        yield mock_sm
+        tts_module._elevenlabs_api_key = None
+
+
+@pytest.fixture
+def mock_tts_urlopen():
+    """Mock urllib.request.urlopen for ElevenLabs API calls."""
+    with patch("lambdas.tts.handler.urllib.request.urlopen") as mock:
+        response = MagicMock()
+        response.__enter__ = lambda s: s
+        response.__exit__ = MagicMock(return_value=False)
+        response.status = 200
+        response.read.return_value = b"\xff\xfb\x90\x00" * 1000  # fake MP3 bytes
+        mock.return_value = response
+        yield mock, response
+
+
+@pytest.fixture
+def mock_tts_s3_upload():
+    """Mock S3 upload for TTS MP3 output."""
+    with patch("lambdas.tts.handler.upload_bytes") as mock:
+        yield mock
+```
+
+#### Dialogue Parsing Tests
+
+```python
+def test_parse_valid_script_returns_turns():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    script = (
+        "**Hype:** Welcome back everyone!\n"
+        "**Roast:** Oh here we go again.\n"
+        "**Phil:** But what does it mean to welcome?"
+    )
+    turns = _parse_dialogue_turns(script)
+    assert len(turns) == 3
+    assert all("text" in t and "voice_id" in t for t in turns)
+
+
+def test_parse_maps_hype_to_correct_voice_id():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    turns = _parse_dialogue_turns("**Hype:** Hello!")
+    assert turns[0]["voice_id"] == "cjVigY5qzO86Huf0OWal"
+
+
+def test_parse_maps_roast_to_correct_voice_id():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    turns = _parse_dialogue_turns("**Roast:** Rubbish.")
+    assert turns[0]["voice_id"] == "JBFqnCBsd6RMkjVDRZzb"
+
+
+def test_parse_maps_phil_to_correct_voice_id():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    turns = _parse_dialogue_turns("**Phil:** Interesting thought.")
+    assert turns[0]["voice_id"] == "cgSgspJ2msm6clMCkdW9"
+
+
+def test_parse_strips_speaker_label_from_text():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    turns = _parse_dialogue_turns("**Hype:** Welcome back!")
+    assert turns[0]["text"] == "Welcome back!"
+    assert "Hype" not in turns[0]["text"]
+
+
+def test_parse_raises_on_malformed_line():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    with pytest.raises(ValueError):
+        _parse_dialogue_turns("This line has no speaker label")
+
+
+def test_parse_raises_on_unknown_speaker():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    with pytest.raises(ValueError):
+        _parse_dialogue_turns("**Unknown:** Who am I?")
+
+
+def test_parse_raises_on_blank_line():
+    from lambdas.tts.handler import _parse_dialogue_turns
+    with pytest.raises(ValueError):
+        _parse_dialogue_turns("**Hype:** Hello!\n\n**Roast:** Hi!")
+```
+
+#### ElevenLabs API Call Tests
+
+```python
+def test_call_elevenlabs_sends_correct_body(mock_elevenlabs_api_key, mock_tts_urlopen):
+    from lambdas.tts.handler import _call_elevenlabs
+    mock_urlopen, mock_response = mock_tts_urlopen
+
+    inputs = [{"text": "Hello", "voice_id": "abc123"}]
+    _call_elevenlabs(inputs)
+
+    call_args = mock_urlopen.call_args
+    req = call_args[0][0]
+    body = json.loads(req.data)
+    assert body["inputs"] == inputs
+    assert body["model_id"] == "eleven_v3"
+
+
+def test_call_elevenlabs_includes_output_format_in_url(mock_elevenlabs_api_key, mock_tts_urlopen):
+    from lambdas.tts.handler import _call_elevenlabs
+    mock_urlopen, _ = mock_tts_urlopen
+
+    _call_elevenlabs([{"text": "Hi", "voice_id": "abc"}])
+
+    req = mock_urlopen.call_args[0][0]
+    assert "output_format=mp3_44100_128" in req.full_url
+
+
+def test_call_elevenlabs_returns_mp3_bytes(mock_elevenlabs_api_key, mock_tts_urlopen):
+    from lambdas.tts.handler import _call_elevenlabs
+    result = _call_elevenlabs([{"text": "Hi", "voice_id": "abc"}])
+    assert isinstance(result, bytes)
+    assert len(result) > 0
+
+
+def test_call_elevenlabs_raises_on_http_error(mock_elevenlabs_api_key, mock_tts_urlopen):
+    from lambdas.tts.handler import _call_elevenlabs
+    mock_urlopen, _ = mock_tts_urlopen
+    mock_urlopen.side_effect = urllib.error.HTTPError(
+        url="", code=422, msg="Validation Error", hdrs={}, fp=None,
+    )
+    with pytest.raises(RuntimeError):
+        _call_elevenlabs([{"text": "Hi", "voice_id": "abc"}])
+```
+
+#### Full TTS Handler Tests
+
+```python
+def test_handler_returns_valid_tts_output(
+    pipeline_metadata, lambda_context, mock_elevenlabs_api_key,
+    mock_tts_urlopen, mock_tts_s3_upload, sample_script_output,
+):
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.tts.handler import lambda_handler
+        result = lambda_handler(
+            {"metadata": pipeline_metadata, "script": sample_script_output},
+            lambda_context,
+        )
+    assert "s3_key" in result
+    assert "duration_seconds" in result
+    assert "character_count" in result
+    assert isinstance(result["duration_seconds"], int)
+
+
+def test_handler_s3_key_format(
+    pipeline_metadata, lambda_context, mock_elevenlabs_api_key,
+    mock_tts_urlopen, mock_tts_s3_upload, sample_script_output,
+):
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.tts.handler import lambda_handler
+        result = lambda_handler(
+            {"metadata": pipeline_metadata, "script": sample_script_output},
+            lambda_context,
+        )
+    assert result["s3_key"] == f"episodes/{pipeline_metadata['execution_id']}/episode.mp3"
+
+
+def test_handler_raises_on_malformed_script(
+    pipeline_metadata, lambda_context, mock_elevenlabs_api_key,
+    mock_tts_urlopen, mock_tts_s3_upload,
+):
+    malformed_script = {
+        "text": "No speaker labels here",
+        "character_count": 22, "segments": ["intro"],
+        "featured_repo": "r", "featured_developer": "d",
+        "cover_art_suggestion": "art",
+    }
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.tts.handler import lambda_handler
+        with pytest.raises(ValueError):
+            lambda_handler(
+                {"metadata": pipeline_metadata, "script": malformed_script},
+                lambda_context,
+            )
+```
+
+### Post-Production Unit Tests
+
+Tests for the Post-Production handler (`tests/unit/test_post_production.py`). Post-Production downloads the cover art and MP3 from S3, runs ffmpeg to combine them into an MP4, inserts episode and featured-developer rows into Postgres, and uploads the final MP4 to S3.
+
+#### Post-Production Fixtures
+
+```python
+@pytest.fixture
+def mock_post_production_s3():
+    """Mock S3 download and upload for Post-Production."""
+    with patch("lambdas.post_production.handler.download_file") as mock_dl, \
+         patch("lambdas.post_production.handler.upload_file") as mock_ul:
+        yield mock_dl, mock_ul
+
+
+@pytest.fixture
+def mock_post_production_db():
+    """Mock Postgres connection for Post-Production inserts."""
+    with patch("lambdas.post_production.handler.get_connection") as mock:
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        conn.__enter__ = lambda s: s
+        conn.__exit__ = MagicMock(return_value=False)
+        cursor.fetchone.return_value = (42,)  # episode_id from RETURNING
+        mock.return_value = conn
+        yield conn, cursor
+
+
+@pytest.fixture
+def mock_ffmpeg():
+    """Mock subprocess.run for ffmpeg."""
+    with patch("lambdas.post_production.handler.subprocess.run") as mock:
+        mock.return_value = MagicMock(returncode=0)
+        yield mock
+
+
+@pytest.fixture
+def full_pipeline_event(
+    pipeline_metadata, sample_discovery_output, sample_research_output,
+    sample_script_output,
+):
+    """Full pipeline state for Post-Production handler input."""
+    return {
+        "metadata": pipeline_metadata,
+        "discovery": sample_discovery_output,
+        "research": sample_research_output,
+        "script": sample_script_output,
+        "producer": {"verdict": "PASS", "score": 8, "notes": "Good"},
+        "cover_art": {"s3_key": "episodes/test-exec/cover.png", "prompt_used": "robots"},
+        "tts": {"s3_key": "episodes/test-exec/episode.mp3", "duration_seconds": 180, "character_count": 4200},
+    }
+```
+
+#### ffmpeg Tests
+
+```python
+def test_run_ffmpeg_calls_subprocess(mock_ffmpeg):
+    from lambdas.post_production.handler import _run_ffmpeg
+    _run_ffmpeg("/tmp/episode.mp3", "/tmp/cover.png", "/tmp/episode.mp4")
+
+    mock_ffmpeg.assert_called_once()
+    args = mock_ffmpeg.call_args[0][0]
+    assert "/opt/bin/ffmpeg" in args[0] or "ffmpeg" in args[0]
+    assert "-shortest" in args
+    assert "-c:v" in args
+    assert "-tune" in args
+
+
+def test_run_ffmpeg_raises_on_nonzero_exit(mock_ffmpeg):
+    from lambdas.post_production.handler import _run_ffmpeg
+    mock_ffmpeg.side_effect = subprocess.CalledProcessError(1, "ffmpeg")
+    with pytest.raises((RuntimeError, subprocess.CalledProcessError)):
+        _run_ffmpeg("/tmp/episode.mp3", "/tmp/cover.png", "/tmp/episode.mp4")
+```
+
+#### Database Tests
+
+```python
+def test_insert_episode_returns_episode_id(mock_post_production_db):
+    from lambdas.post_production.handler import _insert_episode
+    conn, cursor = mock_post_production_db
+    result = _insert_episode(
+        conn, execution_id="test", repo_url="https://github.com/u/r",
+        repo_name="r", developer_github="u", developer_name="User",
+        star_count=5, language="Python", script_text="text",
+        research_json="{}", cover_art_prompt="art",
+        s3_cover_art_path="cover.png", s3_mp3_path="ep.mp3",
+        s3_mp4_path="ep.mp4", producer_attempts=1, air_date="2025-07-13",
+    )
+    assert result == 42
+
+
+def test_insert_featured_developer_executes(mock_post_production_db):
+    from lambdas.post_production.handler import _insert_featured_developer
+    conn, cursor = mock_post_production_db
+    _insert_featured_developer(conn, developer_github="user", episode_id=42, featured_date="2025-07-13")
+    assert cursor.execute.called
+```
+
+#### Full Post-Production Handler Tests
+
+```python
+def test_handler_returns_valid_output(
+    lambda_context, full_pipeline_event,
+    mock_post_production_s3, mock_post_production_db, mock_ffmpeg,
+):
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.post_production.handler import lambda_handler
+        result = lambda_handler(full_pipeline_event, lambda_context)
+
+    assert "s3_mp4_key" in result
+    assert "episode_id" in result
+    assert "air_date" in result
+    assert result["episode_id"] == 42
+
+
+def test_handler_s3_key_contains_execution_id(
+    lambda_context, full_pipeline_event,
+    mock_post_production_s3, mock_post_production_db, mock_ffmpeg,
+):
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.post_production.handler import lambda_handler
+        result = lambda_handler(full_pipeline_event, lambda_context)
+
+    exec_id = full_pipeline_event["metadata"]["execution_id"]
+    assert exec_id in result["s3_mp4_key"]
+    assert result["s3_mp4_key"].endswith(".mp4")
+
+
+def test_handler_air_date_is_iso_format(
+    lambda_context, full_pipeline_event,
+    mock_post_production_s3, mock_post_production_db, mock_ffmpeg,
+):
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.post_production.handler import lambda_handler
+        result = lambda_handler(full_pipeline_event, lambda_context)
+
+    # YYYY-MM-DD format
+    assert len(result["air_date"]) == 10
+    assert result["air_date"].count("-") == 2
+
+
+def test_handler_downloads_cover_art_and_mp3(
+    lambda_context, full_pipeline_event,
+    mock_post_production_s3, mock_post_production_db, mock_ffmpeg,
+):
+    mock_dl, _ = mock_post_production_s3
+    with patch.dict(os.environ, {"S3_BUCKET": "test-bucket"}):
+        from lambdas.post_production.handler import lambda_handler
+        lambda_handler(full_pipeline_event, lambda_context)
+
+    assert mock_dl.call_count == 2  # cover art + MP3
+```
+
+### Site Unit Tests
+
+Tests for the Site handler (`tests/unit/test_site.py`). The Site handler serves the podcast website via a Lambda Function URL behind CloudFront. It queries Postgres for published episodes and renders HTML with presigned S3 URLs for audio playback and cover art.
+
+#### Site Fixtures
+
+```python
+@pytest.fixture
+def mock_site_db():
+    """Mock Postgres connection for Site handler."""
+    with patch("lambdas.site.handler.get_connection") as mock:
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        conn.__enter__ = lambda s: s
+        conn.__exit__ = MagicMock(return_value=False)
+        mock.return_value = conn
+        yield conn, cursor
+
+
+@pytest.fixture
+def mock_site_presigned():
+    """Mock S3 presigned URL generation for Site handler."""
+    with patch("lambdas.site.handler.generate_presigned_url") as mock:
+        mock.return_value = "https://s3.presigned.example/episode.mp3"
+        yield mock
+```
+
+#### Response Tests
+
+```python
+def test_handler_returns_200_for_root(mock_site_db, mock_site_presigned, lambda_context):
+    conn, cursor = mock_site_db
+    cursor.description = [("episode_id",), ("repo_name",), ("air_date",)]
+    cursor.fetchall.return_value = []
+
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/"}, lambda_context)
+
+    assert result["statusCode"] == 200
+    assert "text/html" in result["headers"]["Content-Type"]
+
+
+def test_handler_returns_404_for_unknown_path(mock_site_db, lambda_context):
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/nonexistent"}, lambda_context)
+    assert result["statusCode"] == 404
+
+
+def test_handler_handles_empty_episodes(mock_site_db, mock_site_presigned, lambda_context):
+    conn, cursor = mock_site_db
+    cursor.description = [("episode_id",)]
+    cursor.fetchall.return_value = []
+
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/"}, lambda_context)
+
+    assert result["statusCode"] == 200
+    assert isinstance(result["body"], str)
+
+
+def test_handler_returns_500_on_db_error(mock_site_db, lambda_context):
+    conn, cursor = mock_site_db
+    cursor.execute.side_effect = Exception("connection refused")
+
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/"}, lambda_context)
+
+    assert result["statusCode"] == 500
+```
+
+#### Content Tests
+
+```python
+def test_episodes_in_reverse_chronological_order(mock_site_db, mock_site_presigned, lambda_context):
+    conn, cursor = mock_site_db
+    cursor.description = [
+        ("episode_id",), ("repo_name",), ("air_date",), ("developer_github",),
+        ("star_count_at_recording",), ("s3_mp3_path",), ("s3_cover_art_path",),
+    ]
+    cursor.fetchall.return_value = [
+        (2, "newer-repo", "2025-07-13", "user2", 3, "ep2.mp3", "cover2.png"),
+        (1, "older-repo", "2025-07-06", "user1", 5, "ep1.mp3", "cover1.png"),
+    ]
+
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/"}, lambda_context)
+
+    body = result["body"]
+    newer_pos = body.find("newer-repo")
+    older_pos = body.find("older-repo")
+    assert newer_pos < older_pos  # newer episode appears first
+
+
+def test_episode_data_in_html(mock_site_db, mock_site_presigned, lambda_context):
+    conn, cursor = mock_site_db
+    cursor.description = [
+        ("episode_id",), ("repo_name",), ("air_date",), ("developer_github",),
+        ("star_count_at_recording",), ("s3_mp3_path",), ("s3_cover_art_path",),
+    ]
+    cursor.fetchall.return_value = [
+        (1, "cool-project", "2025-07-06", "testuser", 7, "ep.mp3", "cover.png"),
+    ]
+
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/"}, lambda_context)
+
+    assert "cool-project" in result["body"]
+    assert "testuser" in result["body"]
+    assert "2025-07-06" in result["body"]
+
+
+def test_audio_player_has_presigned_url(mock_site_db, mock_site_presigned, lambda_context):
+    conn, cursor = mock_site_db
+    cursor.description = [
+        ("episode_id",), ("repo_name",), ("air_date",), ("developer_github",),
+        ("star_count_at_recording",), ("s3_mp3_path",), ("s3_cover_art_path",),
+    ]
+    cursor.fetchall.return_value = [
+        (1, "repo", "2025-07-06", "user", 5, "episodes/test/episode.mp3", "cover.png"),
+    ]
+
+    from lambdas.site.handler import lambda_handler
+    result = lambda_handler({"rawPath": "/"}, lambda_context)
+
+    assert "https://s3.presigned.example/episode.mp3" in result["body"]
+    mock_site_presigned.assert_called()
+```
+
+### Shared Module: `test_bedrock.py` (`tests/unit/test_shared/test_bedrock.py`)
+
+Tests for the shared Bedrock client (`shared/bedrock.py`). This module wraps `boto3` calls to AWS Bedrock's `invoke_model` API and provides two functions: `invoke_model` (single prompt-response) and `invoke_with_tools` (agentic tool-use loop).
+
+```python
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+def test_invoke_model_returns_text():
+    with patch("shared.bedrock.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.invoke_model.return_value = {
+            "body": MagicMock(read=lambda: json.dumps({
+                "content": [{"type": "text", "text": "Hello world"}],
+                "stop_reason": "end_turn",
+            }).encode()),
+        }
+        from shared.bedrock import invoke_model
+        result = invoke_model(user_message="Say hello", system_prompt="Be friendly")
+    assert "Hello world" in result
+
+
+def test_invoke_model_body_includes_required_fields():
+    with patch("shared.bedrock.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.invoke_model.return_value = {
+            "body": MagicMock(read=lambda: json.dumps({
+                "content": [{"type": "text", "text": "ok"}],
+            }).encode()),
+        }
+        from shared.bedrock import invoke_model
+        invoke_model(user_message="test", system_prompt="sys")
+
+    body = json.loads(mock_client.invoke_model.call_args.kwargs["body"])
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert "max_tokens" in body
+    assert "system" in body
+    assert "messages" in body
+
+
+def test_invoke_model_passes_effort():
+    with patch("shared.bedrock.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.invoke_model.return_value = {
+            "body": MagicMock(read=lambda: json.dumps({
+                "content": [{"type": "text", "text": "ok"}],
+            }).encode()),
+        }
+        from shared.bedrock import invoke_model
+        invoke_model(user_message="test", system_prompt="sys", effort="high")
+
+    body = json.loads(mock_client.invoke_model.call_args.kwargs["body"])
+    assert body["output_config"]["effort"] == "high"
+
+
+def test_invoke_with_tools_single_turn_returns_text():
+    with patch("shared.bedrock.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.invoke_model.return_value = {
+            "body": MagicMock(read=lambda: json.dumps({
+                "content": [{"type": "text", "text": "Final answer"}],
+                "stop_reason": "end_turn",
+            }).encode()),
+        }
+        from shared.bedrock import invoke_with_tools
+        result = invoke_with_tools(
+            user_message="Find a repo",
+            system_prompt="You are a search agent",
+            tools=[{"name": "search", "description": "Search", "input_schema": {}}],
+            tool_executor=lambda name, inp: '{"result": "ok"}',
+        )
+    assert "Final answer" in result
+
+
+def test_invoke_with_tools_calls_executor_on_tool_use():
+    call_log = []
+    def mock_executor(name, inp):
+        call_log.append(name)
+        return '{"result": "found"}'
+
+    with patch("shared.bedrock.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.invoke_model.side_effect = [
+            {"body": MagicMock(read=lambda: json.dumps({
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "search", "input": {"q": "test"}},
+                ],
+                "stop_reason": "tool_use",
+            }).encode())},
+            {"body": MagicMock(read=lambda: json.dumps({
+                "content": [{"type": "text", "text": "Done"}],
+                "stop_reason": "end_turn",
+            }).encode())},
+        ]
+        from shared.bedrock import invoke_with_tools
+        invoke_with_tools(
+            user_message="Find",
+            system_prompt="Agent",
+            tools=[{"name": "search", "description": "S", "input_schema": {}}],
+            tool_executor=mock_executor,
+        )
+    assert "search" in call_log
+
+
+def test_invoke_with_tools_max_turns_raises():
+    with patch("shared.bedrock.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        # Always return tool_use to exhaust max_turns
+        mock_client.invoke_model.return_value = {
+            "body": MagicMock(read=lambda: json.dumps({
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "s", "input": {}},
+                ],
+                "stop_reason": "tool_use",
+            }).encode()),
+        }
+        from shared.bedrock import invoke_with_tools
+        with pytest.raises(RuntimeError, match="max_turns"):
+            invoke_with_tools(
+                user_message="Loop forever",
+                system_prompt="Agent",
+                tools=[{"name": "s", "description": "S", "input_schema": {}}],
+                tool_executor=lambda n, i: "{}",
+                max_turns=2,
+            )
+```
+
+### Shared Module: `test_db.py` (`tests/unit/test_shared/test_db.py`)
+
+Tests for the shared database module (`shared/db.py`). This module provides `query` (read), `execute` (write), and `get_connection` (raw connection) functions backed by `psycopg2`.
+
+```python
+import os
+from unittest.mock import MagicMock, patch, call
+
+import pytest
+
+
+def test_query_returns_rows():
+    with patch("shared.db.psycopg2.connect") as mock_connect:
+        conn = MagicMock()
+        cursor = MagicMock()
+        mock_connect.return_value = conn
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        cursor.fetchall.return_value = [("user1",), ("user2",)]
+        from shared.db import query
+        result = query("SELECT developer_github FROM featured_developers")
+    assert result == [("user1",), ("user2",)]
+
+
+def test_query_passes_params():
+    with patch("shared.db.psycopg2.connect") as mock_connect:
+        conn = MagicMock()
+        cursor = MagicMock()
+        mock_connect.return_value = conn
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        cursor.fetchall.return_value = []
+        from shared.db import query
+        query("SELECT * FROM episodes WHERE episode_id = %s", (1,))
+    cursor.execute.assert_called_with("SELECT * FROM episodes WHERE episode_id = %s", (1,))
+
+
+def test_query_empty_results():
+    with patch("shared.db.psycopg2.connect") as mock_connect:
+        conn = MagicMock()
+        cursor = MagicMock()
+        mock_connect.return_value = conn
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        cursor.fetchall.return_value = []
+        from shared.db import query
+        result = query("SELECT * FROM episodes WHERE 1=0")
+    assert result == []
+
+
+def test_execute_returns_rowcount():
+    with patch("shared.db.psycopg2.connect") as mock_connect:
+        conn = MagicMock()
+        cursor = MagicMock()
+        mock_connect.return_value = conn
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        cursor.rowcount = 3
+        from shared.db import execute
+        result = execute("UPDATE episodes SET language = 'Go' WHERE language = 'Golang'")
+    assert result == 3
+
+
+def test_execute_commits():
+    with patch("shared.db.psycopg2.connect") as mock_connect:
+        conn = MagicMock()
+        cursor = MagicMock()
+        mock_connect.return_value = conn
+        conn.cursor.return_value = cursor
+        cursor.__enter__ = lambda s: s
+        cursor.__exit__ = MagicMock(return_value=False)
+        cursor.rowcount = 1
+        from shared.db import execute
+        execute("INSERT INTO episodes (repo_name) VALUES ('test')")
+    conn.commit.assert_called_once()
+
+
+def test_connection_uses_env_var():
+    with patch("shared.db.psycopg2.connect") as mock_connect, \
+         patch.dict(os.environ, {"DB_CONNECTION_STRING": "postgresql://test:pw@host:5432/db"}):
+        conn = MagicMock()
+        mock_connect.return_value = conn
+        conn.cursor.return_value = MagicMock()
+        from shared.db import get_connection
+        get_connection()
+    assert "postgresql://test:pw@host:5432/db" in str(mock_connect.call_args)
+
+
+def test_connection_uses_sslmode_require():
+    with patch("shared.db.psycopg2.connect") as mock_connect, \
+         patch.dict(os.environ, {"DB_CONNECTION_STRING": "postgresql://test@host/db"}):
+        conn = MagicMock()
+        mock_connect.return_value = conn
+        from shared.db import get_connection
+        get_connection()
+    assert "sslmode" in str(mock_connect.call_args) or "require" in str(mock_connect.call_args)
+
+
+def test_query_error_propagates():
+    with patch("shared.db.psycopg2.connect") as mock_connect:
+        mock_connect.side_effect = Exception("connection refused")
+        from shared.db import query
+        with pytest.raises(Exception, match="connection refused"):
+            query("SELECT 1")
+```
+
+### Shared Module: `test_s3.py` (`tests/unit/test_shared/test_s3.py`)
+
+Tests for the shared S3 module (`shared/s3.py`). This module provides `upload_bytes`, `upload_file`, `download_file`, and `generate_presigned_url` functions.
+
+```python
+from unittest.mock import MagicMock, patch
+
+
+def test_upload_bytes_calls_put_object():
+    with patch("shared.s3.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        from shared.s3 import upload_bytes
+        upload_bytes("my-bucket", "key/file.png", b"data", "image/png")
+    mock_client.put_object.assert_called_once()
+    call_kwargs = mock_client.put_object.call_args.kwargs
+    assert call_kwargs["Bucket"] == "my-bucket"
+    assert call_kwargs["Key"] == "key/file.png"
+    assert call_kwargs["Body"] == b"data"
+    assert call_kwargs["ContentType"] == "image/png"
+
+
+def test_upload_file_calls_upload():
+    with patch("shared.s3.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        from shared.s3 import upload_file
+        upload_file("my-bucket", "key/file.mp4", "/tmp/file.mp4", "video/mp4")
+    assert mock_client.upload_file.called or mock_client.put_object.called
+
+
+def test_generate_presigned_url_returns_string():
+    with patch("shared.s3.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.generate_presigned_url.return_value = "https://presigned.example"
+        from shared.s3 import generate_presigned_url
+        result = generate_presigned_url("my-bucket", "key/file.mp3")
+    assert result == "https://presigned.example"
+
+
+def test_generate_presigned_url_default_expiry():
+    with patch("shared.s3.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        mock_client.generate_presigned_url.return_value = "https://url"
+        from shared.s3 import generate_presigned_url
+        generate_presigned_url("my-bucket", "key/file.mp3")
+    call_kwargs = mock_client.generate_presigned_url.call_args.kwargs
+    assert call_kwargs.get("ExpiresIn", 3600) == 3600
+
+
+def test_download_file_calls_download():
+    with patch("shared.s3.boto3.client") as mock_client_factory:
+        mock_client = MagicMock()
+        mock_client_factory.return_value = mock_client
+        from shared.s3 import download_file
+        download_file("my-bucket", "key/file.mp3", "/tmp/file.mp3")
+    assert mock_client.download_file.called
+    call_args = mock_client.download_file.call_args
+    assert "my-bucket" in str(call_args)
+    assert "key/file.mp3" in str(call_args)
 ```
 
 ### Integration Test Pattern

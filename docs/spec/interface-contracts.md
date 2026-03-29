@@ -43,7 +43,12 @@ The state object grows as it passes through the pipeline. Each key is populated 
   // IncrementAttempt Pass state on Script retry.
   "metadata": {
     "execution_id": "arn:aws:states:us-east-1:123456789:execution:zerostars-pipeline:abc-123",
-    "script_attempt": 1
+    "script_attempt": 1,
+    // resume_from: (Optional) Set by the MCP retry_from_step tool when retrying
+    // a failed execution from a specific step. When present, the ResumeRouter
+    // Choice state in the state machine routes to this step instead of Discovery.
+    // Not present in normal (non-retry) executions.
+    "resume_from": "Script"
   }
 }
 ```
@@ -84,7 +89,7 @@ The Discovery agent queries Postgres using a `query_postgres` Bedrock tool backe
 
 **Output parsing:** The handler must parse the agent's final text response as JSON. Because Claude models sometimes wrap JSON in markdown fences (~20% of the time despite prompt instructions), the parser strips `` ``` `` fences before `json.loads()`. It then validates:
 - All 9 required fields are present
-- `star_count` is an integer under 10
+- `star_count` is an integer under 10. If the model returns it as a string (e.g., `"3"`), the parser coerces it to `int`.
 - `repo_url` starts with `https://github.com/`
 
 If validation fails, the handler raises `ValueError`, causing the Lambda to fail. Step Functions retries handle transient agent output issues.
@@ -120,6 +125,17 @@ If validation fails, the handler raises `ValueError`, causing the Lambda to fail
 }
 ```
 
+**Output parsing:** The handler must parse the agent's final text response as JSON. Like Discovery, the parser strips markdown fences (`` ```json `` and bare `` ``` ``) before `json.loads()`. It then validates:
+
+- All 9 required fields are present (`developer_name`, `developer_github`, `developer_bio`, `public_repos_count`, `notable_repos`, `commit_patterns`, `technical_profile`, `interesting_findings`, `hiring_signals`). Raises `ValueError` naming the missing field.
+- `public_repos_count` is an integer. If the model returns a string (e.g., `"15"`), the parser coerces it to `int`.
+- `developer_bio` is a string. If null, the parser coerces to empty string `""`.
+- Each entry in `notable_repos` has all 4 required sub-fields: `name`, `description`, `stars`, `language`. Raises `ValueError` if any sub-field is missing.
+- An empty `notable_repos` list (`[]`) is valid — some developers have no notable repos.
+- Invalid JSON raises `ValueError` or `json.JSONDecodeError`.
+
+If validation fails, the handler raises `ValueError`, causing the Lambda to fail. Step Functions retries handle transient agent output issues.
+
 ### Script Lambda
 
 **Reads from state:**
@@ -141,6 +157,8 @@ If validation fails, the handler raises `ValueError`, causing the Lambda to fail
   "cover_art_suggestion": "Brief description of a visual concept for the cover art"
 }
 ```
+
+**Output parsing:** The handler strips markdown fences before `json.loads()`. It then validates required fields/segments and overwrites `character_count` with `len(data["text"])` rather than trusting the model's self-reported count. If the model returns `character_count` as a string, the parser coerces it to `int`. Raises `ValueError` if `character_count >= 5000` or required segments are missing.
 
 ### Producer Lambda
 

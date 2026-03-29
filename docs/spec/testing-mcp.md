@@ -88,6 +88,28 @@ def mock_logs_client():
 
 
 @pytest.fixture
+def mock_observation_clients():
+    """Mock boto3 clients for observation module — dispatches SFN and Logs.
+
+    The observation module creates its own boto3 clients for Step Functions
+    and CloudWatch Logs. This fixture patches at the observation module path
+    (not the pipeline module path) to correctly intercept both.
+    """
+    sfn_client = MagicMock()
+    logs_client = MagicMock()
+
+    def client_factory(service_name, **kwargs):
+        if service_name == "stepfunctions":
+            return sfn_client
+        elif service_name == "logs":
+            return logs_client
+        raise ValueError(f"Unexpected service: {service_name}")
+
+    with patch("lambdas.mcp.tools.observation.boto3.client", side_effect=client_factory):
+        yield sfn_client, logs_client
+
+
+@pytest.fixture
 def mock_s3_client():
     """Mock S3 boto3 client for asset tools."""
     with patch("lambdas.mcp.tools.assets.boto3.client") as mock:
@@ -97,29 +119,34 @@ def mock_s3_client():
 
 
 @pytest.fixture
-def mock_cloudfront_client():
-    """Mock CloudFront boto3 client for site tools."""
-    with patch("lambdas.mcp.tools.site.boto3.client") as mock:
-        client = MagicMock()
-        mock.return_value = client
-        yield client
+def mock_site_boto3_clients():
+    """Mock boto3.client for site tools — dispatches by service name.
 
+    CloudFront and ACM are separate AWS services. The site module calls
+    boto3.client("cloudfront") and boto3.client("acm") separately.
+    This fixture uses side_effect to return different mocks for each.
+    """
+    cf_client = MagicMock()
+    acm_client = MagicMock()
 
-@pytest.fixture
-def mock_acm_client():
-    """Mock ACM boto3 client for get_site_status."""
-    with patch("lambdas.mcp.tools.site.boto3.client") as mock:
-        client = MagicMock()
-        mock.return_value = client
-        yield client
+    def client_factory(service_name, **kwargs):
+        if service_name == "cloudfront":
+            return cf_client
+        elif service_name == "acm":
+            return acm_client
+        raise ValueError(f"Unexpected service: {service_name}")
+
+    with patch("lambdas.mcp.tools.site.boto3.client", side_effect=client_factory):
+        yield cf_client, acm_client
 
 
 @pytest.fixture
 def mock_mcp_db(mock_db_connection):
-    """Patches psycopg2 at the MCP data module's import path.
+    """Patches get_connection at the MCP data module's import path.
 
-    Reuses the shared mock_db_connection fixture from the top-level conftest,
-    but patches it at the MCP module path.
+    The assets module (assets.py) delegates database queries through the data
+    module's functions, so patching data.get_connection covers both data and
+    asset tool tests that need DB access.
     """
     with patch("lambdas.mcp.tools.data.get_connection") as mock:
         conn = MagicMock()
@@ -388,6 +415,9 @@ def test_retry_from_step_name_format(mock_sfn_client, sample_execution_failed):
 
 ```python
 import json
+from unittest.mock import MagicMock
+
+import pytest
 
 from tests.unit.test_mcp.conftest import EXECUTION_ARN
 
@@ -622,8 +652,13 @@ def test_invoke_agent_lambda_error_raises(mock_lambda_client):
 ```python
 import time
 
+import pytest
 
-def test_get_agent_logs_correct_log_group(mock_logs_client):
+from tests.unit.test_mcp.conftest import EXECUTION_ARN
+
+
+def test_get_agent_logs_correct_log_group(mock_observation_clients):
+    _, mock_logs_client = mock_observation_clients
     from lambdas.mcp.tools.observation import get_agent_logs
     mock_logs_client.filter_log_events.return_value = {"events": []}
 
@@ -633,7 +668,8 @@ def test_get_agent_logs_correct_log_group(mock_logs_client):
     assert call_kwargs["logGroupName"] == "/aws/lambda/zerostars-discovery"
 
 
-def test_get_agent_logs_start_time_from_since_minutes(mock_logs_client):
+def test_get_agent_logs_start_time_from_since_minutes(mock_observation_clients):
+    _, mock_logs_client = mock_observation_clients
     from lambdas.mcp.tools.observation import get_agent_logs
     mock_logs_client.filter_log_events.return_value = {"events": []}
     before = int(time.time() * 1000) - (30 * 60 * 1000)
@@ -644,7 +680,8 @@ def test_get_agent_logs_start_time_from_since_minutes(mock_logs_client):
     assert abs(start_time - before) < 5000  # within 5 seconds tolerance
 
 
-def test_get_agent_logs_filters_by_execution_id(mock_logs_client):
+def test_get_agent_logs_filters_by_execution_id(mock_observation_clients):
+    _, mock_logs_client = mock_observation_clients
     from lambdas.mcp.tools.observation import get_agent_logs
     mock_logs_client.filter_log_events.return_value = {"events": []}
 
@@ -654,7 +691,8 @@ def test_get_agent_logs_filters_by_execution_id(mock_logs_client):
     assert "arn:aws:states:test" in call_kwargs["filterPattern"]
 
 
-def test_get_agent_logs_respects_limit(mock_logs_client):
+def test_get_agent_logs_respects_limit(mock_observation_clients):
+    _, mock_logs_client = mock_observation_clients
     from lambdas.mcp.tools.observation import get_agent_logs
     events = [{"timestamp": i, "message": f'{{"level": "INFO"}}'} for i in range(100)]
     mock_logs_client.filter_log_events.return_value = {"events": events}
@@ -664,7 +702,8 @@ def test_get_agent_logs_respects_limit(mock_logs_client):
     assert len(result["logs"]) <= 20
 
 
-def test_get_agent_logs_filters_by_log_level(mock_logs_client):
+def test_get_agent_logs_filters_by_log_level(mock_observation_clients):
+    _, mock_logs_client = mock_observation_clients
     from lambdas.mcp.tools.observation import get_agent_logs
     events = [
         {"timestamp": 1, "message": '{"level": "INFO", "message": "ok"}'},
@@ -681,7 +720,8 @@ def test_get_agent_logs_filters_by_log_level(mock_logs_client):
     assert "ERROR" in levels
 
 
-def test_get_execution_history_passes_include_flag(mock_sfn_client):
+def test_get_execution_history_passes_include_flag(mock_observation_clients):
+    mock_sfn_client, _ = mock_observation_clients
     from lambdas.mcp.tools.observation import get_execution_history
     mock_sfn_client.get_execution_history.return_value = {"events": []}
 
@@ -691,7 +731,8 @@ def test_get_execution_history_passes_include_flag(mock_sfn_client):
     assert call_kwargs["includeExecutionData"] is False
 
 
-def test_get_execution_history_paginates(mock_sfn_client):
+def test_get_execution_history_paginates(mock_observation_clients):
+    mock_sfn_client, _ = mock_observation_clients
     from lambdas.mcp.tools.observation import get_execution_history
     mock_sfn_client.get_execution_history.side_effect = [
         {"events": [{"type": "TaskStateEntered", "id": 1}], "nextToken": "page2"},
@@ -704,7 +745,8 @@ def test_get_execution_history_paginates(mock_sfn_client):
     assert mock_sfn_client.get_execution_history.call_count == 2
 
 
-def test_get_pipeline_health_calculates_success_rate(mock_sfn_client, mock_mcp_db):
+def test_get_pipeline_health_calculates_success_rate(mock_observation_clients, mock_mcp_db):
+    mock_sfn_client, _ = mock_observation_clients
     from lambdas.mcp.tools.observation import get_pipeline_health
     conn, cursor = mock_mcp_db
     cursor.fetchone.return_value = (1, "cool-project", "2025-07-06")
@@ -997,7 +1039,8 @@ def test_get_presigned_url_caps_at_max(mock_s3_client):
 ### Unit Tests: Site (`test_site.py`)
 
 ```python
-def test_invalidate_cache_default_paths(mock_cloudfront_client):
+def test_invalidate_cache_default_paths(mock_site_boto3_clients):
+    mock_cloudfront_client, _ = mock_site_boto3_clients
     from lambdas.mcp.tools.site import invalidate_cache
     mock_cloudfront_client.create_invalidation.return_value = {
         "Invalidation": {"Id": "I123", "Status": "InProgress"},
@@ -1011,7 +1054,8 @@ def test_invalidate_cache_default_paths(mock_cloudfront_client):
     assert result["invalidation_id"] == "I123"
 
 
-def test_invalidate_cache_custom_paths(mock_cloudfront_client):
+def test_invalidate_cache_custom_paths(mock_site_boto3_clients):
+    mock_cloudfront_client, _ = mock_site_boto3_clients
     from lambdas.mcp.tools.site import invalidate_cache
     mock_cloudfront_client.create_invalidation.return_value = {
         "Invalidation": {"Id": "I456", "Status": "InProgress"},
@@ -1025,7 +1069,8 @@ def test_invalidate_cache_custom_paths(mock_cloudfront_client):
     assert paths == ["/", "/episodes/1"]
 
 
-def test_get_site_status_aggregates_sources(mock_cloudfront_client, mock_acm_client, mock_mcp_db):
+def test_get_site_status_aggregates_sources(mock_site_boto3_clients, mock_mcp_db):
+    mock_cloudfront_client, mock_acm_client = mock_site_boto3_clients
     from lambdas.mcp.tools.site import get_site_status
     conn, cursor = mock_mcp_db
     cursor.fetchone.side_effect = [(11,), (11, "cool-project", "2025-07-06")]
@@ -1085,6 +1130,36 @@ def test_featured_developers_resource(mock_mcp_db):
     result = read_featured_developers_resource()
 
     assert result[0]["developer_github"] == "user1"
+
+
+def test_episode_detail_resource_returns_full_row(mock_mcp_db):
+    from lambdas.mcp.resources import read_episode_detail_resource
+    conn, cursor = mock_mcp_db
+    cursor.description = [
+        ("episode_id",), ("script_text",), ("research_json",),
+        ("cover_art_prompt",), ("air_date",), ("repo_name",),
+    ]
+    cursor.fetchone.return_value = (
+        1, "**Hype:** Hello!", '{"key": "val"}', "art prompt", "2025-07-06", "repo",
+    )
+
+    result = read_episode_detail_resource(episode_id=1)
+
+    assert result["episode_id"] == 1
+    assert result["script_text"] == "**Hype:** Hello!"
+    assert result["research_json"] == '{"key": "val"}'
+
+
+def test_metrics_resource_returns_list(mock_mcp_db):
+    from lambdas.mcp.resources import read_metrics_resource
+    conn, cursor = mock_mcp_db
+    cursor.description = [("episode_id",), ("repo_name",), ("views",), ("likes",)]
+    cursor.fetchall.return_value = [(1, "repo", 1200, 45)]
+
+    result = read_metrics_resource()
+
+    assert len(result) == 1
+    assert result[0]["views"] == 1200
 ```
 
 ### Unit Tests: Handler (`test_handler.py`)

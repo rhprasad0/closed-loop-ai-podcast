@@ -30,7 +30,7 @@ Post-Production is the tightest at ~115 MB — well within the 250 MB ceiling. N
 
 ### Shared Layer
 
-The shared layer at `lambdas/shared/` provides `bedrock.py`, `db.py`, `s3.py`, `logging.py`, and `types.py`. It also bundles `psycopg2` for Postgres access and `aws-lambda-powertools` for structured logging.
+The shared layer at `lambdas/shared/` provides `bedrock.py`, `db.py`, `s3.py`, `logging.py`, `tracing.py`, `metrics.py`, and `types.py`. It also bundles `psycopg2` for Postgres access and `aws-lambda-powertools` for structured logging.
 
 Use `psycopg2-binary` with `--platform manylinux2014_x86_64 --only-binary=:all:`. The manylinux2014 wheels are compatible with Lambda's Amazon Linux 2023 runtime for Python 3.12. The older advice about needing `aws-psycopg2` or a Docker-compiled build is outdated.
 

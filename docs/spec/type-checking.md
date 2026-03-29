@@ -213,6 +213,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.request
 from typing import Any
 
 import boto3
@@ -282,6 +283,125 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> DiscoveryOut
 - The module-level global `_exa_api_key` is typed as `str | None` and narrowed inside its getter function via the `global` + `if is None` pattern. The DB connection string comes from `os.environ["DB_CONNECTION_STRING"]` via `shared/db.py`.
 - `TOOL_DEFINITIONS` is typed as `list[ToolDefinition]` (alias for `list[dict[str, Any]]`).
 
+### Research Handler Internal Function Signatures
+
+The Research handler (`lambdas/research/handler.py`) follows the same agentic pattern as Discovery — it uses `invoke_with_tools` with a tool executor callback. The key difference is that Research calls the GitHub REST API (5 tools) instead of Exa/Postgres/GitHub (3 tools). Research does not access Secrets Manager or Postgres.
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+import urllib.request
+from typing import Any
+
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.bedrock import ToolDefinition, ToolExecutor, invoke_with_tools
+from shared.logging import get_logger
+from shared.types import PipelineState, ResearchOutput
+
+logger = get_logger("research")
+
+# --- Tool definitions (module-level constant) ---
+TOOL_DEFINITIONS: list[ToolDefinition] = [...]  # populated per [External API Contracts](./external-api-contracts.md)
+
+# --- GitHub API constants ---
+GITHUB_USER_AGENT: str = "zerostars-research-agent"
+GITHUB_TIMEOUT: int = 15  # seconds
+
+
+def _load_system_prompt() -> str:
+    """Read prompts/research.md from disk.
+
+    Uses LAMBDA_TASK_ROOT (set by AWS Lambda runtime) to locate the prompt file,
+    falling back to the handler's directory for local testing.
+    """
+    ...
+
+
+def _execute_get_github_user(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call GitHub Users API. Returns curated field subset.
+
+    Returns {"error": "..."} on HTTPError or socket.timeout.
+    """
+    ...
+
+
+def _execute_get_user_repos(tool_input: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+    """Call GitHub user repos API. Returns curated array of repo objects on success,
+    or {"error": "..."} dict on failure.
+    """
+    ...
+
+
+def _execute_get_repo_details(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call GitHub repos API. Returns curated field subset.
+
+    Returns {"error": "..."} on HTTPError or socket.timeout.
+    """
+    ...
+
+
+def _execute_get_repo_readme(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call GitHub README API. Base64-decodes the content field before returning.
+
+    Returns {"content": <decoded_text>} on success, {"error": "..."} on failure.
+    """
+    ...
+
+
+def _execute_search_repositories(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Call GitHub search API. Returns curated {total_count, items} dict.
+
+    Returns {"error": "..."} on HTTPError or socket.timeout.
+    """
+    ...
+
+
+def _execute_tool(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Dispatch to the correct tool function, return JSON string."""
+    ...
+
+
+def _build_user_message(event: PipelineState) -> str:
+    """Assemble discovery fields into a user message for the Research agent.
+
+    Extracts $.discovery.developer_github, $.discovery.repo_name, and
+    $.discovery.repo_url from the pipeline state. Returns structured
+    plain-text with section headers.
+    """
+    ...
+
+
+def _parse_research_output(text: str) -> ResearchOutput:
+    """Parse agent text response to ResearchOutput. Strips markdown fences, validates.
+
+    Coerces public_repos_count from string to int if needed.
+    Coerces null developer_bio to empty string.
+    Validates notable_repos sub-objects have name, description, stars, language.
+    Raises ValueError if required fields missing or validation fails.
+    """
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> ResearchOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- `_execute_get_user_repos` has a dual return type: `list[dict[str, Any]]` on success (array of curated repo objects), `dict[str, Any]` on failure (error dict). This differs from the other tool functions which always return `dict[str, Any]`.
+- `_build_user_message` reads `event["discovery"]["developer_github"]`, `event["discovery"]["repo_name"]`, and `event["discovery"]["repo_url"]` to assemble the user message.
+- `_parse_research_output` coerces `public_repos_count` from string to int (models sometimes return numeric values as strings) and `developer_bio` from `None` to `""` (GitHub API returns null when bio is not set).
+- `GITHUB_USER_AGENT` is `"zerostars-research-agent"` — all GitHub API calls include a `User-Agent` header with this value. GitHub returns 403 without it. Same pattern as Discovery's `"zerostars-discovery-agent"`.
+- `_load_system_prompt` uses `os.environ.get("LAMBDA_TASK_ROOT", os.path.dirname(__file__))` — identical pattern to Discovery and Cover Art.
+- No `boto3` import — Research does not fetch secrets from Secrets Manager. It calls Bedrock via `invoke_with_tools` (which manages the boto3 client internally) and GitHub via `urllib.request`.
+- `TOOL_DEFINITIONS` typed as `list[ToolDefinition]` with 5 tools matching the [GitHub API](./external-api-contracts.md#github-api) section.
+- `_execute_tool` calls `json.dumps()` on the return value of the tool functions, so its return type is `str`.
+
 ### Script Handler Internal Function Signatures
 
 The Script handler (`lambdas/script/handler.py`) is simpler than Discovery and Research because it uses `invoke_model` (single prompt-response) rather than `invoke_with_tools` (agentic tool loop). There are no tool definitions, no tool executor functions, and no dispatcher. The handler's job is to assemble a user message from upstream state, call Bedrock once, and parse the response.
@@ -315,7 +435,11 @@ SPEAKER_PATTERN: re.Pattern[str] = re.compile(
 
 
 def _load_system_prompt() -> str:
-    """Read prompts/script.md from disk. Uses LAMBDA_TASK_ROOT."""
+    """Read prompts/script.md from disk.
+
+    Uses LAMBDA_TASK_ROOT (set by AWS Lambda runtime) to locate the prompt file,
+    falling back to the handler's directory for local testing.
+    """
     ...
 
 
@@ -385,7 +509,11 @@ BENCHMARK_QUERY: str = """
 
 
 def _load_system_prompt() -> str:
-    """Read prompts/producer.md from disk. Uses LAMBDA_TASK_ROOT."""
+    """Read prompts/producer.md from disk.
+
+    Uses LAMBDA_TASK_ROOT (set by AWS Lambda runtime) to locate the prompt file,
+    falling back to the handler's directory for local testing.
+    """
     ...
 
 
@@ -551,6 +679,365 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> CoverArtOutp
 - `_load_prompt_template` uses `os.environ.get("LAMBDA_TASK_ROOT", os.path.dirname(__file__))` — identical pattern to Discovery, Research, Script, and Producer.
 - The handler validates PNG magic bytes (`b"\x89PNG"`) after decoding. This is a lightweight sanity check, not full image validation.
 - No `_parse_*_output` function — unlike the agent handlers, Cover Art does not parse model-generated JSON. The output is constructed programmatically from the S3 key and prompt string.
+
+### TTS Handler Internal Function Signatures
+
+The TTS handler (`lambdas/tts/handler.py`) parses the approved script into dialogue turns, calls the ElevenLabs text-to-dialogue API, and uploads the resulting MP3 to S3. It has no Bedrock interaction — the script has already been written and approved by upstream agents.
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import re
+import urllib.request
+from typing import Any
+
+import boto3
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.logging import get_logger
+from shared.s3 import upload_bytes
+from shared.types import PipelineState, TTSOutput
+
+logger = get_logger("tts")
+
+# --- Module-level constants ---
+
+ELEVENLABS_ENDPOINT: str = "https://api.elevenlabs.io/v1/text-to-dialogue"
+ELEVENLABS_MODEL_ID: str = "eleven_v3"
+ELEVENLABS_OUTPUT_FORMAT: str = "mp3_44100_128"
+
+SPEAKER_VOICE_MAP: dict[str, str] = {
+    "Hype": "cjVigY5qzO86Huf0OWal",
+    "Roast": "JBFqnCBsd6RMkjVDRZzb",
+    "Phil": "cgSgspJ2msm6clMCkdW9",
+}
+
+SPEAKER_PATTERN: re.Pattern[str] = re.compile(
+    r"^\*\*(?P<speaker>Hype|Roast|Phil):\*\*\s*(?P<text>.+)$"
+)
+
+MAX_CHARACTER_COUNT: int = 5000
+
+# --- Module-level cached credentials ---
+_elevenlabs_api_key: str | None = None
+
+
+def _get_elevenlabs_api_key() -> str:
+    """Fetch ElevenLabs API key from Secrets Manager, cached across warm starts.
+
+    Secret name: zerostars/elevenlabs-api-key.
+    """
+    ...
+
+
+def _parse_dialogue_turns(script_text: str) -> list[dict[str, str]]:
+    """Parse script text into ElevenLabs dialogue turn format.
+
+    Splits on newlines, matches each line against SPEAKER_PATTERN.
+    Maps speaker names to voice IDs via SPEAKER_VOICE_MAP.
+    Returns list of {"text": "...", "voice_id": "..."} dicts.
+
+    Raises ValueError on:
+    - Lines that do not match SPEAKER_PATTERN (malformed or unknown speaker)
+    - Blank lines (the script format does not allow blank lines)
+    """
+    ...
+
+
+def _call_elevenlabs(inputs: list[dict[str, str]]) -> bytes:
+    """POST to ElevenLabs text-to-dialogue API and return raw MP3 bytes.
+
+    Sends request body: {"inputs": inputs, "model_id": ELEVENLABS_MODEL_ID}
+    with output_format query parameter.
+
+    Raises RuntimeError on non-200 responses (422 validation error, 5xx server error).
+    """
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> TTSOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- `SPEAKER_VOICE_MAP` maps the three persona names to their ElevenLabs voice IDs. These are the same IDs defined in [CLAUDE.md](../../CLAUDE.md) and [External API Contracts](./external-api-contracts.md#elevenlabs--text-to-dialogue-tts).
+- `_parse_dialogue_turns` is strict: any line that doesn't match `SPEAKER_PATTERN` raises `ValueError`. This is intentional — the Script Text Format spec in [Interface Contracts](./interface-contracts.md#script-text-format) says "Lines that don't match are an error."
+- `_call_elevenlabs` returns raw `bytes` (MP3 data from the response body). The ElevenLabs API returns `200 OK` with binary MP3 on success, or a JSON error body on failure.
+- `duration_seconds` is estimated from the MP3 byte length: `int(len(mp3_bytes) / (128000 / 8))`. The `output_format=mp3_44100_128` parameter specifies 128kbps bitrate. This is an approximation, not frame-accurate parsing — sufficient for podcast-length audio. The value is `int`, not `float` — sub-second accuracy is not meaningful at podcast scale (~180s episodes).
+- Secrets Manager secret name is `zerostars/elevenlabs-api-key`, following the same naming convention as Discovery's `zerostars/exa-api-key`.
+- `_elevenlabs_api_key` is cached at module level with the same pattern as Discovery's `_exa_api_key`.
+- No `shared.bedrock` import — TTS does not call Bedrock. It parses a pre-approved script and calls ElevenLabs directly.
+
+### Post-Production Handler Internal Function Signatures
+
+The Post-Production handler (`lambdas/post_production/handler.py`) is the final pipeline step. It downloads the cover art PNG and episode MP3 from S3, uses ffmpeg to combine them into an MP4, uploads the MP4 to S3, and writes the episode record to Postgres. It creates two database rows: one in `episodes` and one in `featured_developers`.
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from datetime import date
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from shared.db import get_connection
+from shared.logging import get_logger
+from shared.s3 import download_file, upload_file
+from shared.types import PipelineState, PostProductionOutput
+
+logger = get_logger("post_production")
+
+# --- Module-level constants ---
+EASTERN_TZ: ZoneInfo = ZoneInfo("America/New_York")
+FFMPEG_PATH: str = "/opt/bin/ffmpeg"  # from the ffmpeg Lambda Layer
+
+
+def _download_s3_file(bucket: str, key: str, local_path: str) -> None:
+    """Download an S3 object to a local file path using shared.s3.download_file."""
+    ...
+
+
+def _run_ffmpeg(mp3_path: str, png_path: str, mp4_path: str) -> None:
+    """Run ffmpeg to combine MP3 audio + PNG cover art into MP4 video.
+
+    Command: ffmpeg -loop 1 -i {png_path} -i {mp3_path}
+             -c:v libx264 -tune stillimage -c:a aac -b:a 128k
+             -pix_fmt yuv420p -shortest {mp4_path}
+
+    Uses subprocess.run with check=True.
+    Raises RuntimeError on non-zero exit code.
+    """
+    ...
+
+
+def _insert_episode(
+    conn: Any,
+    execution_id: str,
+    repo_url: str,
+    repo_name: str,
+    developer_github: str,
+    developer_name: str,
+    star_count: int,
+    language: str,
+    script_text: str,
+    research_json: str,
+    cover_art_prompt: str,
+    s3_cover_art_path: str,
+    s3_mp3_path: str,
+    s3_mp4_path: str,
+    producer_attempts: int,
+    air_date: str,
+) -> int:
+    """INSERT into episodes table. Returns episode_id via RETURNING clause.
+
+    Uses the connection's cursor directly (not shared.db.query) because this
+    runs inside a transaction with _insert_featured_developer.
+    """
+    ...
+
+
+def _insert_featured_developer(
+    conn: Any,
+    developer_github: str,
+    episode_id: int,
+    featured_date: str,
+) -> None:
+    """INSERT into featured_developers table.
+
+    Uses the same connection/transaction as _insert_episode.
+    """
+    ...
+
+
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: PipelineState, context: LambdaContext) -> PostProductionOutput:
+    ...
+```
+
+**Key typing notes:**
+
+- Uses `shared.db.get_connection()` directly (not `query()` or `execute()`) because it needs to execute two INSERTs in a single transaction. The handler opens a connection, inserts into `episodes` (with `RETURNING episode_id`), inserts into `featured_developers` using the returned `episode_id`, commits, then closes.
+- Uses `shared.s3.download_file` (the function added to `s3.py` for this handler).
+- `air_date` is computed as `date.today()` in Eastern Time (`America/New_York` timezone), formatted as `YYYY-MM-DD` (ISO 8601 date). Uses `zoneinfo.ZoneInfo` (Python 3.9+ stdlib, available on Lambda Python 3.12).
+- `research_json` is serialized via `json.dumps()`, not psycopg2 auto-JSONB adaptation. The raw JSON string is inserted into the `research_json` column (type `jsonb` in Postgres, which accepts text).
+- `/tmp` is used for intermediate files: `/tmp/episode.mp3`, `/tmp/cover.png`, `/tmp/episode.mp4`. Lambda provides 512 MB of `/tmp` storage by default.
+- `_run_ffmpeg` uses `subprocess.run([FFMPEG_PATH, ...], check=True, capture_output=True)`. The ffmpeg binary is at `/opt/bin/ffmpeg`, provided by the ffmpeg Lambda Layer.
+- `FFMPEG_PATH` points to `/opt/bin/ffmpeg` because Lambda Layers extract to `/opt`.
+- No `shared.bedrock` import — Post-Production does not call Bedrock.
+- No `boto3` import — S3 access is via `shared.s3`, database access via `shared.db.get_connection()`.
+
+### Site Handler Internal Function Signatures
+
+The Site handler (`lambdas/site/handler.py`) serves the podcast website via a Lambda Function URL. It queries the database for episodes, renders Jinja2 templates, and returns HTML responses. It does not participate in the pipeline state machine — it receives Lambda Function URL events, not `PipelineState`.
+
+```python
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from jinja2 import Environment, FileSystemLoader
+
+from shared.db import get_connection
+from shared.logging import get_logger
+from shared.s3 import generate_presigned_url
+
+logger = get_logger("site")
+
+# --- Module-level constants ---
+PRESIGNED_URL_EXPIRY: int = 3600  # 1 hour for audio player URLs
+
+
+def _get_episodes() -> list[dict[str, Any]]:
+    """Query episodes table, ordered by air_date DESC (most recent first).
+
+    Returns list of dicts with episode metadata for the listing page.
+    Excludes large fields (script_text, research_json, cover_art_prompt).
+    Returns empty list on DB error (the site should not crash on DB failure).
+    """
+    ...
+
+
+def _render_template(template_name: str, **context: Any) -> str:
+    """Render a Jinja2 template from the templates/ directory.
+
+    Uses FileSystemLoader with the templates directory resolved via
+    LAMBDA_TASK_ROOT (falling back to handler directory for local testing).
+    """
+    ...
+
+
+def _build_response(
+    status_code: int,
+    body: str,
+    content_type: str = "text/html",
+) -> dict[str, object]:
+    """Build a Lambda Function URL response dict.
+
+    Returns {"statusCode": int, "headers": {"Content-Type": content_type}, "body": str}.
+    """
+    ...
+
+
+def lambda_handler(event: dict[str, object], context: LambdaContext) -> dict[str, object]:
+    """Handle Lambda Function URL requests.
+
+    Routing:
+    - "/" → episode listing page (200 with HTML)
+    - All other paths → 404
+
+    Event format: Lambda Function URL events use rawPath for the request path,
+    requestContext for metadata. See AWS docs for full event schema.
+    """
+    ...
+```
+
+**Key typing notes:**
+
+- **Different type signature than pipeline handlers:** The handler receives `dict[str, object]` (Lambda Function URL event), not `PipelineState`. It returns `dict[str, object]` (Function URL response), not a TypedDict.
+- `_get_episodes` uses `shared.db.get_connection()` directly because it needs to build dicts from `cursor.description` column names. It catches exceptions and returns an empty list — the site should degrade gracefully, not crash.
+- `_render_template` uses Jinja2's `FileSystemLoader`. The `jinja2` package is pip-installed into the Lambda deployment package by `lambdas/site/build.sh`.
+- `_build_response` builds the Function URL response format: `{"statusCode": 200, "headers": {...}, "body": "<html>..."}`.
+- `generate_presigned_url` from `shared.s3` creates time-limited URLs for the HTML5 audio player. The 1-hour expiry (`PRESIGNED_URL_EXPIRY`) is long enough for a listening session.
+- Cover art images are served via CloudFront at `/assets/*` (backed by S3 via OAC), not via presigned URLs. Only MP3 audio uses presigned S3 URLs.
+- No `shared.bedrock` import — the site does not call Bedrock.
+- The handler routes on `event["rawPath"]` — only `/` is a valid route in v1. Future routes could be added for individual episode pages.
+
+### Shared Module: `db.py` Function Signatures
+
+`lambdas/shared/python/shared/db.py` provides Postgres access via `psycopg2`. Every function must have full type annotations for mypy strict.
+
+```python
+from __future__ import annotations
+
+import os
+
+import psycopg2
+
+
+def get_connection() -> psycopg2.extensions.connection:
+    """Create a new Postgres connection using DB_CONNECTION_STRING env var.
+
+    Uses sslmode=require. Returns a psycopg2 connection object.
+    Callers are responsible for closing the connection.
+    """
+    ...
+
+
+def query(sql: str, params: tuple[object, ...] | None = None) -> list[tuple[object, ...]]:
+    """Execute a SELECT query and return all rows.
+
+    Opens a connection, executes the query, fetches all rows, closes connection.
+    Returns rows as a list of tuples (column values in select order).
+    For INSERT...RETURNING queries that need a result row, use this function.
+    """
+    ...
+
+
+def execute(sql: str, params: tuple[object, ...] | None = None) -> int:
+    """Execute an INSERT/UPDATE/DELETE statement.
+
+    Opens a connection, executes the statement, commits, closes connection.
+    Returns the rowcount (number of affected rows).
+    """
+    ...
+```
+
+**Key typing notes:**
+
+- `get_connection()` reads `os.environ["DB_CONNECTION_STRING"]` and passes `sslmode=require` to `psycopg2.connect()`.
+- `query()` and `execute()` each open and close their own connection. There is no connection pooling — Lambda warm starts reuse the runtime, but each function call gets a fresh connection.
+- `query()` returns `list[tuple]`, not `list[dict]`. Callers that need column names must use `cursor.description` (the Discovery and MCP handlers do this internally).
+- The `params` parameter uses `tuple[object, ...] | None` to satisfy mypy strict. Under `psycopg2`, params can be a tuple or None.
+
+### Shared Module: `s3.py` Function Signatures
+
+`lambdas/shared/python/shared/s3.py` provides S3 helpers via `boto3`. The `bucket` parameter is passed explicitly by callers — callers read the `S3_BUCKET` environment variable and pass the value.
+
+```python
+from __future__ import annotations
+
+import boto3
+
+
+def upload_bytes(bucket: str, key: str, data: bytes, content_type: str) -> None:
+    """Upload raw bytes to S3 via put_object."""
+    ...
+
+
+def upload_file(bucket: str, key: str, filepath: str, content_type: str) -> None:
+    """Upload a local file to S3 via upload_file."""
+    ...
+
+
+def download_file(bucket: str, key: str, local_path: str) -> None:
+    """Download an S3 object to a local file path via download_file."""
+    ...
+
+
+def generate_presigned_url(bucket: str, key: str, expiry: int = 3600) -> str:
+    """Generate a presigned GET URL for an S3 object.
+
+    Default expiry is 3600 seconds (1 hour).
+    """
+    ...
+```
+
+**Key typing notes:**
+
+- `bucket` is an explicit parameter, not read from env internally. Callers read `os.environ["S3_BUCKET"]` and pass it. The `file-manifest.md` note "Bucket name from `S3_BUCKET` env var" describes where callers get the value, not how the functions work internally.
+- `download_file` is needed by the Post-Production handler to download MP3 and cover art PNG from S3 to `/tmp` for ffmpeg processing.
+- `generate_presigned_url` default expiry of 3600s (1 hour) matches the Site handler's `PRESIGNED_URL_EXPIRY` constant.
+- The module creates a `boto3.client("s3")` at module level, cached across Lambda warm starts.
 
 ### Typing Conventions
 
