@@ -22,18 +22,9 @@ Effort = Literal["low", "medium", "high", "max"]
 DEFAULT_EFFORT_AGENTIC: Effort = "high"
 DEFAULT_EFFORT_SINGLE_TURN: Effort = "medium"
 
-# Module-level cached Bedrock Runtime client, lazy-initialized on first call.
-# Any is used because boto3-stubs types the client as BedrockRuntimeClient but
-# the module-level cache must start as None.
-_bedrock_client: Any | None = None
-
-
 def _get_bedrock_client() -> Any:
-    """Return a cached boto3 bedrock-runtime client, created on first call."""
-    global _bedrock_client
-    if _bedrock_client is None:
-        _bedrock_client = boto3.client("bedrock-runtime")
-    return _bedrock_client
+    """Return a boto3 bedrock-runtime client."""
+    return boto3.client("bedrock-runtime")
 
 
 def _invoke_with_retry(body: dict[str, Any], model_id: str) -> dict[str, Any]:
