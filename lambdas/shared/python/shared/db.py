@@ -12,7 +12,7 @@ def get_connection() -> psycopg2.extensions.connection:
     Uses sslmode=require. Returns a psycopg2 connection object.
     Callers are responsible for closing the connection.
     """
-    conn_str = os.environ["DB_CONNECTION_STRING"]
+    conn_str = os.environ.get("DB_CONNECTION_STRING", "")
     return psycopg2.connect(conn_str, sslmode="require")
 
 
