@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from tools import agents, assets, data, observation, pipeline, site
+from . import agents, assets, data, observation, pipeline, site
 
 __all__ = [
     "agents",

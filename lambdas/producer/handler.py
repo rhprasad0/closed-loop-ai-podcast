@@ -160,10 +160,7 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> ProducerOutp
 
     benchmarks = _fetch_benchmark_scripts()
     user_message = _build_user_message(event, benchmarks)
-    result_text = invoke_model(
-        user_message=user_message,
-        system_prompt=system_prompt,
-    )
+    result_text = invoke_model(user_message, system_prompt=system_prompt)
 
     output = _parse_producer_output(result_text)
     logger.info(

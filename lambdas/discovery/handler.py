@@ -129,8 +129,11 @@ def _execute_exa_search(tool_input: dict[str, Any]) -> dict[str, Any]:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result: dict[str, Any] = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result: dict[str, Any] = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return {"error": f"Exa HTTP error {exc.code}: {exc.reason}"}
     return result
 
 

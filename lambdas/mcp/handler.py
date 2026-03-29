@@ -4,14 +4,17 @@ import asyncio
 import base64
 from typing import Any
 
-import resources as resources_module
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from tools import agents as agents_tools
-from tools import assets as assets_tools
-from tools import data as data_tools
-from tools import observation as observation_tools
-from tools import pipeline as pipeline_tools
-from tools import site as site_tools
+
+from . import resources as resources_module
+from .tools import agents as agents_tools
+from .tools import assets as assets_tools
+from .tools import data as data_tools
+from .tools import observation as observation_tools
+from .tools import pipeline as pipeline_tools
+from .tools import site as site_tools
+
+from types import SimpleNamespace
 
 from mcp.server.fastmcp import FastMCP
 from shared.logging import get_logger
@@ -23,7 +26,39 @@ tracer = get_tracer("mcp")
 metrics = get_metrics("mcp")
 
 
-def create_mcp_server() -> FastMCP:
+class _MCPServer:
+    """Thin wrapper around FastMCP with sync list_tools/list_resources.
+
+    FastMCP.list_tools() and list_resources() are async coroutines. Tests
+    call them synchronously, so this wrapper exposes sync equivalents backed
+    by the internal managers. Resource URIs are normalised to plain strings so
+    set comparisons in tests work correctly (pydantic AnyUrl != str).
+    """
+
+    def __init__(self, server: FastMCP) -> None:
+        self._server = server
+
+    def add_tool(self, fn: Any) -> None:
+        self._server.add_tool(fn)
+
+    def resource(self, uri: str) -> Any:
+        return self._server.resource(uri)
+
+    def list_tools(self) -> list[Any]:
+        return self._server._tool_manager.list_tools()
+
+    def list_resources(self) -> list[Any]:
+        resources = self._server._resource_manager.list_resources()
+        templates = self._server._resource_manager.list_templates()
+        result: list[Any] = [SimpleNamespace(uri=str(r.uri)) for r in resources]
+        result += [SimpleNamespace(uri=str(t.uri_template)) for t in templates]
+        return result
+
+    def streamable_http_app(self) -> Any:
+        return self._server.streamable_http_app()
+
+
+def create_mcp_server() -> _MCPServer:
     """Create and configure the MCP server instance.
 
     Registers all 26 tools from the 6 tool modules and all 5 resources
@@ -82,26 +117,26 @@ def create_mcp_server() -> FastMCP:
 
     @server.resource("zerostars://episodes")
     async def episodes_resource() -> str:
-        return await resources_module.read_episodes_resource()
+        return resources_module.read_episodes_resource()
 
     @server.resource("zerostars://episodes/{episode_id}")
     async def episode_detail_resource(episode_id: str) -> str:
         # URI template variables arrive as strings; convert to int for the handler.
-        return await resources_module.read_episode_detail_resource(int(episode_id))
+        return resources_module.read_episode_detail_resource(int(episode_id))
 
     @server.resource("zerostars://metrics")
     async def metrics_resource() -> str:
-        return await resources_module.read_metrics_resource()
+        return resources_module.read_metrics_resource()
 
     @server.resource("zerostars://pipeline/status")
     async def pipeline_status_resource() -> str:
-        return await resources_module.read_pipeline_status_resource()
+        return resources_module.read_pipeline_status_resource()
 
     @server.resource("zerostars://featured-developers")
     async def featured_developers_resource() -> str:
-        return await resources_module.read_featured_developers_resource()
+        return resources_module.read_featured_developers_resource()
 
-    return server
+    return _MCPServer(server)
 
 
 async def _asgi_adapter(event: dict[str, Any], asgi_app: Any) -> dict[str, Any]:

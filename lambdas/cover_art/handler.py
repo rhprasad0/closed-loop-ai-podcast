@@ -152,12 +152,12 @@ def _generate_image(prompt: str) -> bytes:
 
     images: list[str] = result.get("images", [])
     if not images:
-        raise RuntimeError("Nova Canvas returned empty images array")
+        raise RuntimeError("Nova Canvas returned no images")
 
     image_bytes = base64.b64decode(images[0])
 
     if not image_bytes.startswith(PNG_MAGIC_BYTES):
-        logger.warning("Decoded image does not start with PNG magic bytes")
+        raise RuntimeError("invalid PNG: decoded image does not start with PNG magic bytes")
 
     return image_bytes
 
@@ -169,7 +169,7 @@ def lambda_handler(event: PipelineState, context: LambdaContext) -> CoverArtOutp
     execution_id = event.get("metadata", {}).get("execution_id", "unknown")
     logger.info("Starting cover art generation", extra={"execution_id": execution_id})
 
-    script = event.get("script", {})
+    script = event["script"]
     discovery = event.get("discovery", {})
 
     cover_art_suggestion: str = script.get("cover_art_suggestion", "")
