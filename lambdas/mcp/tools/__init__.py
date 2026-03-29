@@ -6,9 +6,9 @@ handler.py can register all 26 tools in one call if desired.
 
 from __future__ import annotations
 
-from tools import agents, assets, data, observation, pipeline, site
-
 from mcp.server.fastmcp import FastMCP
+
+from tools import agents, assets, data, observation, pipeline, site
 
 __all__ = [
     "agents",
