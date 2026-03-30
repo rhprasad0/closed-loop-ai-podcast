@@ -12,13 +12,24 @@ from shared.logging import get_logger
 from shared.metrics import get_metrics
 from shared.tracing import get_tracer
 
-from . import resources as resources_module
-from .tools import agents as agents_tools
-from .tools import assets as assets_tools
-from .tools import data as data_tools
-from .tools import observation as observation_tools
-from .tools import pipeline as pipeline_tools
-from .tools import site as site_tools
+try:
+    # Lambda runtime: zip root is working directory, no package context
+    import resources as resources_module  # type: ignore[import-untyped]
+    from tools import agents as agents_tools  # type: ignore[import-untyped]
+    from tools import assets as assets_tools  # type: ignore[import-untyped]
+    from tools import data as data_tools  # type: ignore[import-untyped]
+    from tools import observation as observation_tools  # type: ignore[import-untyped]
+    from tools import pipeline as pipeline_tools  # type: ignore[import-untyped]
+    from tools import site as site_tools  # type: ignore[import-untyped]
+except ImportError:
+    # Local / test environment: relative imports work
+    from . import resources as resources_module
+    from .tools import agents as agents_tools
+    from .tools import assets as assets_tools
+    from .tools import data as data_tools
+    from .tools import observation as observation_tools
+    from .tools import pipeline as pipeline_tools
+    from .tools import site as site_tools
 
 logger = get_logger("mcp")
 tracer = get_tracer("mcp")

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from . import agents, assets, data, observation, pipeline, site
+try:
+    from tools import agents, assets, data, observation, pipeline, site  # type: ignore[import-untyped]
+except ImportError:
+    from . import agents, assets, data, observation, pipeline, site
 
 __all__ = [
     "agents",

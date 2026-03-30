@@ -27,7 +27,7 @@ EPISODES_QUERY: str = """
         developer_name,
         developer_github,
         air_date,
-        star_count,
+        star_count_at_recording,
         language,
         s3_cover_art_path,
         s3_mp3_path

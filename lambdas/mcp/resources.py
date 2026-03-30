@@ -16,7 +16,10 @@ from typing import Any
 
 import boto3
 
-from .tools import data as data_tools
+try:
+    from tools import data as data_tools  # type: ignore[import-untyped]
+except ImportError:
+    from .tools import data as data_tools
 
 
 def _serialize(value: object) -> object:

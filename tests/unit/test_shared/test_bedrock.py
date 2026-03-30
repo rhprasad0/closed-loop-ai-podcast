@@ -63,7 +63,12 @@ def test_invoke_model_passes_effort():
         }
         from shared.bedrock import invoke_model
 
-        invoke_model(user_message="test", system_prompt="sys", effort="high")
+        invoke_model(
+            user_message="test",
+            system_prompt="sys",
+            effort="high",
+            model_id="us.anthropic.claude-sonnet-4-6",
+        )
 
     body = json.loads(mock_client.invoke_model.call_args.kwargs["body"])
     assert body["output_config"]["effort"] == "high"
