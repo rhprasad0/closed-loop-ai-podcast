@@ -5,6 +5,21 @@ resource "aws_lambda_function_url" "site" {
   authorization_type = "NONE" # CloudFront is the public entry point; Lambda URL is not directly exposed
 }
 
+resource "aws_lambda_permission" "site_function_url" {
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.site.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "site_function_url_invoke" {
+  statement_id  = "FunctionURLAllowPublicInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.site.function_name
+  principal     = "*"
+}
+
 # ─── CloudFront OAC (Origin Access Control for S3 cover art) ─────────────────
 
 resource "aws_cloudfront_origin_access_control" "episodes" {

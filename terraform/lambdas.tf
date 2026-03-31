@@ -697,6 +697,7 @@ resource "aws_lambda_function" "site" {
       POWERTOOLS_TRACER_CAPTURE_RESPONSE = "false"
       DB_CONNECTION_STRING               = var.db_connection_string
       S3_BUCKET                          = aws_s3_bucket.episodes.id
+      CLOUDFRONT_DOMAIN                  = var.domain_name
     }
   }
 
