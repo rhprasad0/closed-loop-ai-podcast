@@ -81,7 +81,12 @@ def create_mcp_server() -> _MCPServer:
     class — it wraps the low-level Server and exposes the @server.tool() decorator
     pattern and list_tools() used by tests.
     """
-    server = FastMCP(name="zerostars-mcp")
+    server = FastMCP(
+        name="zerostars-mcp",
+        host="0.0.0.0",
+        stateless_http=True,
+        json_response=True,
+    )
 
     # -- Pipeline control tools (5) --
     server.add_tool(pipeline_tools.start_pipeline)
@@ -152,9 +157,11 @@ def create_mcp_server() -> _MCPServer:
 async def _asgi_adapter(event: dict[str, Any], asgi_app: Any) -> dict[str, Any]:
     """Translate a Lambda Function URL event (payload v2) into an ASGI 3.0 call.
 
-    Collects the ASGI response and returns it as a Lambda-compatible dict.
-    Used to run the FastMCP Starlette app inside the synchronous lambda_handler.
+    Drives the ASGI lifespan protocol before processing the HTTP request,
+    then triggers lifespan shutdown afterwards. This ensures the MCP
+    StreamableHTTPSessionManager's task group is initialized.
     """
+    # ── Parse Lambda event into ASGI scope ──────────────────────────────
     raw_headers: dict[str, str] = event.get("headers") or {}
     asgi_headers: list[tuple[bytes, bytes]] = [
         (k.lower().encode(), v.encode()) for k, v in raw_headers.items()
@@ -184,6 +191,47 @@ async def _asgi_adapter(event: dict[str, Any], asgi_app: Any) -> dict[str, Any]:
         "client": ("127.0.0.1", 0),
     }
 
+    # ── Drive ASGI lifespan startup ─────────────────────────────────────
+    startup_complete = asyncio.Event()
+    shutdown_trigger = asyncio.Event()
+    startup_error: list[str] = []
+
+    async def _run_lifespan() -> None:
+        startup_sent = False
+
+        async def lifespan_receive() -> dict[str, Any]:
+            nonlocal startup_sent
+            if not startup_sent:
+                startup_sent = True
+                return {"type": "lifespan.startup"}
+            await shutdown_trigger.wait()
+            return {"type": "lifespan.shutdown"}
+
+        async def lifespan_send(message: dict[str, Any]) -> None:
+            if message["type"] == "lifespan.startup.complete":
+                startup_complete.set()
+            elif message["type"] == "lifespan.startup.failed":
+                startup_error.append(message.get("message", "Startup failed"))
+                startup_complete.set()
+
+        await asgi_app(
+            {"type": "lifespan", "asgi": {"version": "3.0"}, "state": {}},
+            lifespan_receive,
+            lifespan_send,
+        )
+
+    lifespan_task = asyncio.create_task(_run_lifespan())
+    await startup_complete.wait()
+
+    if startup_error:
+        lifespan_task.cancel()
+        try:
+            await lifespan_task
+        except asyncio.CancelledError:
+            pass
+        raise RuntimeError(f"ASGI lifespan startup failed: {startup_error[0]}")
+
+    # ── Process HTTP request ────────────────────────────────────────────
     response_status: list[int] = [200]
     response_headers: list[list[tuple[bytes, bytes]]] = [[]]
     response_chunks: list[bytes] = []
@@ -200,7 +248,12 @@ async def _asgi_adapter(event: dict[str, Any], asgi_app: Any) -> dict[str, Any]:
             if chunk:
                 response_chunks.append(chunk)
 
-    await asgi_app(scope, receive, send)
+    try:
+        await asgi_app(scope, receive, send)
+    finally:
+        # ── Drive ASGI lifespan shutdown ────────────────────────────────
+        shutdown_trigger.set()
+        await lifespan_task
 
     resp_body = b"".join(response_chunks).decode("utf-8")
     resp_hdrs = {k.decode(): v.decode() for k, v in response_headers[0]}

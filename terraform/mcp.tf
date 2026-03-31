@@ -171,16 +171,23 @@ resource "aws_lambda_function" "mcp" {
 
 resource "aws_lambda_function_url" "mcp" {
   function_name      = aws_lambda_function.mcp.function_name
-  authorization_type = "AWS_IAM"
-  invoke_mode        = "RESPONSE_STREAM" # required for Streamable HTTP SSE transport
+  authorization_type = "NONE"
+  invoke_mode        = "BUFFERED" # JSON request-response; handler returns {statusCode, headers, body}
 }
 
 # ─── MCP Function URL Permission ──────────────────────────────────────────────
 
 resource "aws_lambda_permission" "mcp_invoke" {
-  statement_id           = "AllowMCPPrincipalInvoke"
+  statement_id           = "AllowPublicInvoke"
   action                 = "lambda:InvokeFunctionUrl"
   function_name          = aws_lambda_function.mcp.function_name
-  principal              = var.mcp_allowed_principal
-  function_url_auth_type = "AWS_IAM"
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "mcp_invoke_function" {
+  statement_id  = "AllowPublicInvokeFunction"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.mcp.function_name
+  principal     = "*"
 }

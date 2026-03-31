@@ -34,10 +34,6 @@ variable "alert_email" {
   description = "Email address for CloudWatch alarm notifications. Empty string disables the SNS subscription."
 }
 
-variable "mcp_allowed_principal" {
-  type        = string
-  description = "IAM principal ARN permitted to invoke the MCP Lambda Function URL"
-}
 
 variable "pipeline_failure_threshold" {
   type        = number
