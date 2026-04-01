@@ -128,9 +128,9 @@ resource "aws_cloudfront_distribution" "site" {
     max_ttl     = 86400 # 24 hours
   }
 
-  # /assets/* behavior: serve cover art from S3 via OAC (long TTL — images are immutable)
+  # /episodes/* behavior: serve cover art from S3 via OAC (long TTL — images are immutable)
   ordered_cache_behavior {
-    path_pattern           = "/assets/*"
+    path_pattern           = "/episodes/*"
     target_origin_id       = "episodes-s3"
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD"]

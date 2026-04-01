@@ -125,13 +125,13 @@ def lambda_handler(event: dict[str, object], context: LambdaContext) -> dict[str
         else:
             episode["audio_url"] = ""
 
-        # Cover art served via CloudFront /assets/* path (not presigned URLs)
+        # Cover art served via CloudFront /episodes/* path (not presigned URLs)
         cover_art_key = episode.get("s3_cover_art_path", "")
         if cover_art_key and cloudfront_domain:
-            episode["cover_art_url"] = f"https://{cloudfront_domain}/assets/{cover_art_key}"
+            episode["cover_art_url"] = f"https://{cloudfront_domain}/{cover_art_key}"
         elif cover_art_key:
             # Fallback: use the S3 key directly as the path component
-            episode["cover_art_url"] = f"/assets/{cover_art_key}"
+            episode["cover_art_url"] = f"/{cover_art_key}"
         else:
             episode["cover_art_url"] = ""
 
