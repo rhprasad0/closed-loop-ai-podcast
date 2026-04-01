@@ -3,6 +3,9 @@ set -euo pipefail
 
 echo "=== Post-create setup ==="
 
+echo "--- Installing global npm packages ---"
+sudo npm install -g @openai/codex
+
 echo "--- Tool versions ---"
 python --version
 terraform version | head -1
@@ -10,6 +13,7 @@ sam --version
 aws --version
 node --version
 claude --version 2>/dev/null || echo "Claude Code: installed (run 'claude' to authenticate)"
+codex --version 2>/dev/null || echo "Codex: installed (run 'codex login' to authenticate)"
 psql --version
 ffmpeg -version | head -1
 docker --version
